@@ -76,7 +76,10 @@ try {
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
     await mobile.goto(url, { waitUntil: 'networkidle' });
+    await mobile.addStyleTag({ content: 'html { height: 0 !important; transform: translateZ(0); } body { position: fixed; inset: 0; height: 100dvh; }' });
     if (!await mobile.locator('#tavern-forum-root').isVisible()) throw new Error('mobile forum did not open from the floating launcher');
+    const mobileRootBox = await mobile.locator('#tavern-forum-root').boundingBox();
+    if (!mobileRootBox || mobileRootBox.height < 800) throw new Error(`mobile forum collapsed to ${mobileRootBox?.height || 0}px under a transformed zero-height root`);
     await mobile.locator('[data-action="close"]').last().click();
     await mobile.locator('#tavern-forum-menu-item').dispatchEvent('touchend');
     if (!await mobile.locator('#tavern-forum-root').isVisible()) throw new Error('mobile extension menu touch did not open the forum');

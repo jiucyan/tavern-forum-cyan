@@ -1,6 +1,6 @@
 {
   "name": "tavern-forum-cyan",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "private": true,
   "type": "module",
   "description": "An immersive in-world social forum extension for SillyTavern.",
