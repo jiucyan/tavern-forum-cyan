@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <title>微坛 v0.3 预览</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+        body { background: radial-gradient(circle at 18% 22%, #ffe5ef, transparent 32%), radial-gradient(circle at 82% 72%, #dff4ff, transparent 34%), #f7f2f5; }
+    </style>
+</head>
+<body>
+<script type="module">
+    const now = Date.now();
+    const metadata = {
+        tavern_forum_data: {
+            version: 8,
+            topic: '雾港夜话',
+            posts: [
+                {
+                    id: 'post-1', author: '夜航记录员', handle: 'night_log', isAi: true,
+                    content: '第三声汽笛以后，旧码头的灯居然一盏接一盏亮了。巡夜队说是线路检修，可我明明看见空仓库里有人影。',
+                    tags: ['雾港', '旧码头'], likes: 128, likedByUser: true, favorite: false, selectedForInjection: true,
+                    imagePrompt: '潮湿夜色中的旧码头，雾气、橙色路灯与远处仓库的神秘人影', createdAt: now - 18 * 60000,
+                    comments: [
+                        { id: 'c1', author: '纸鸢', handle: 'paperbird', content: '我也听到了，但第三声比平时低很多。', imagePrompt: '雾中钟楼下拍到的模糊灯影', isAi: true, createdAt: now - 12 * 60000 },
+                        { id: 'c2', author: '林舟', handle: 'me', content: '有人去仓库附近看过吗？', isAi: false, createdAt: now - 8 * 60000 },
+                        { id: 'c3', author: '夜航记录员', handle: 'night_log', content: '别单独过去，东侧围栏刚刚被重新锁上。', replyTo: 'me', isAi: true, createdAt: now - 5 * 60000 },
+                    ],
+                },
+                {
+                    id: 'post-2', author: '旧报摊老板', handle: 'old_news', isAi: true,
+                    content: '今晚最后一班渡船临时取消。不是天气原因——船员全都在下午六点前请了假。',
+                    tags: ['渡船停航'], likes: 46, favorite: true, selectedForInjection: false, createdAt: now - 43 * 60000,
+                    imagePrompt: '与这篇动态相符的真实现场照片：今晚最后一班渡船临时取消。',
+                    comments: [],
+                },
+            ],
+            npcs: [
+                { id: 'npc-night', name: '夜航记录员', handle: 'night_log', bio: '记录雾港每一次异常潮汐与航行事故。', persona: '谨慎、克制，习惯用具体时间和地点说话。', profileGenerated: true, followingHandles: ['paperbird'], followers: 1280, following: 76, inject: true, followedByUser: true, followsUser: true, createdAt: now, updatedAt: now },
+                { id: 'npc-paper', name: '纸鸢', handle: 'paperbird', bio: '住在钟楼附近的自由摄影师。', persona: '好奇，敏锐，偶尔冲动。', profileGenerated: true, followingHandles: ['night_log'], followers: 386, following: 112, inject: false, followedByUser: false, followsUser: true, createdAt: now, updatedAt: now },
+                { id: 'npc-news', name: '旧报摊老板', handle: 'old_news', bio: '似乎知道每一条没登上报纸的消息。', persona: '说话简短，总会保留一半信息。', profileGenerated: true, followers: 901, following: 23, inject: false, createdAt: now, updatedAt: now },
+            ],
+            conversations: [
+                { id: 'dm-1', type: 'npc', targetId: 'npc-night', name: '夜航记录员', handle: 'night_log', messages: [{ id: 'm1', role: 'assistant', content: '如果你也听到了汽笛，今晚最好别靠近东岸。', createdAt: now - 20 * 60000 }], unread: 1, createdAt: now, updatedAt: now },
+            ],
+            notifications: [
+                { id: 'n1', type: 'reply', actorNpcId: 'npc-night', actorName: '夜航记录员', postId: 'post-1', content: '夜航记录员回复了你的评论：别单独过去，东侧围栏刚刚被重新锁上。', read: false, createdAt: now - 5 * 60000 },
+                { id: 'n2', type: 'mutual', actorNpcId: 'npc-night', actorName: '夜航记录员', postId: '', content: '夜航记录员与你互相关注了', read: false, createdAt: now - 16 * 60000 },
+            ],
+            createdAt: now - 86400000,
+            updatedAt: now,
+        },
+    };
+
+    const listeners = new Map();
+    const context = {
+        extensionSettings: {}, chatMetadata: metadata, chatId: 'preview-chat', groupId: null, characterId: 0,
+        characters: [{ name: '沈雾', avatar: '', description: '雾港调查员。', personality: '冷静而敏锐。', scenario: '正在调查旧码头。', data: { extensions: { world: '雾港设定' } } }],
+        chat: [
+            { is_user: true, name: '林舟', mes: '我们来到旧码头，远处响起了第三声汽笛。' },
+            { is_user: false, name: '沈雾', mes: '沈雾抬手示意停下，仓库二楼的灯正在依次亮起。' },
+        ],
+        name1: '林舟', name2: '沈雾', powerUserSettings: { persona_description: '林舟是一名记者。' },
+        eventTypes: { CHAT_CHANGED: 'chat_changed', MESSAGE_RECEIVED: 'message_received', MESSAGE_EDITED: 'message_edited', MESSAGE_DELETED: 'message_deleted', WORLDINFO_UPDATED: 'worldinfo_updated' },
+        eventSource: { on(type, callback) { listeners.set(type, callback); }, off() {} },
+        saveSettingsDebounced() {}, saveMetadataDebounced() {}, async saveMetadata() {}, setExtensionPrompt() {},
+        getCharacterCardFields() { return { description: '雾港调查员。', personality: '冷静而敏锐。', scenario: '正在调查旧码头。' }; },
+        getWorldInfoNames() { return ['雾港设定']; },
+        async loadWorldInfo() { return { entries: { 1: { uid: 1, comment: '旧码头', content: '旧码头在午夜后封闭。', key: ['码头'], disable: false } } }; },
+        chatCompletionSettings: { prompts: [{ identifier: 'world-tone', name: '世界语气', role: 'system', content: '保持雾港世界的悬疑氛围。' }], prompt_order: [{ character_id: 100001, order: [{ identifier: 'world-tone', enabled: true }] }] },
+        substituteParams(value) { return value; },
+        generateCalls: 0,
+        async generateRaw(options) {
+            context.generateCalls += 1;
+            if (options?.jsonSchema?.name === 'tavern_forum_role_profile') return '{"bio":"记录雾港每一次异常潮汐与航行事故。","location":"东岸灯塔","signature":"潮水会留下证据。","tags":["航行"],"followers":1280,"following":76,"followingHandles":["paperbird"],"persona":"谨慎克制的夜航记录员。","pinnedPost":"第三声汽笛之后不要靠近东岸。"}';
+            const promptText = Array.isArray(options?.prompt) ? options.prompt.map(message => message.content).join('\n') : String(options?.prompt || options?.user || '');
+            if (promptText.includes('私信记录')) return '我看见你的消息了，东岸今晚仍不安全。';
+            return '{"topic":"雾港夜话","posts":[]}';
+        },
+    };
+    const local = new Map();
+    globalThis.SillyTavern = { getContext: () => context, libs: { localforage: { async getItem(key) { return local.get(key); }, async setItem(key, value) { local.set(key, value); }, async removeItem(key) { local.delete(key); } } } };
+    globalThis.toastr = { success() {}, warning() {}, error() {} };
+    const { initializeForumUi } = await import('./src/ui-v3.js');
+    await initializeForumUi();
+    document.getElementById('tavern-forum-fab')?.click();
+</script>
+</body>
+</html>
