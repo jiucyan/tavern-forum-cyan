@@ -76,6 +76,10 @@ try {
 
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
     await mobile.goto(url, { waitUntil: 'networkidle' });
+    if (!await mobile.locator('#tavern-forum-root').isVisible()) throw new Error('mobile forum did not open from the floating launcher');
+    await mobile.locator('[data-action="close"]').last().click();
+    await mobile.locator('#tavern-forum-menu-item').dispatchEvent('touchend');
+    if (!await mobile.locator('#tavern-forum-root').isVisible()) throw new Error('mobile extension menu touch did not open the forum');
     await mobile.screenshot({ path: 'preview-mobile.png' });
     await mobile.locator('[data-action="open-post"]').first().click();
     await mobile.screenshot({ path: 'preview-post-detail-mobile.png' });

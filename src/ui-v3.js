@@ -61,6 +61,8 @@ const ROOT_ID = 'tavern-forum-root';
 const FAB_ID = 'tavern-forum-fab';
 const MENU_ID = 'tavern-forum-menu-item';
 const SETTINGS_BLOCK_ID = 'tavern-forum-settings-block';
+let launcherCaptureInstalled = false;
+let lastMenuLauncherActivation = 0;
 const CUSTOM_STYLE_ID = 'tavern-forum-custom-css';
 const BUILTIN_CUSTOM_CSS_TEMPLATE = `/*
  * 微坛标准 CSS 美化模板
@@ -2531,6 +2533,24 @@ function updateLaunchers() {
     if (fabDot) fabDot.classList.toggle('is-on', settings.injection.enabled);
 }
 
+function handleMenuLauncherActivation(event) {
+    const source = event.target instanceof Element ? event.target : null;
+    if (!source?.closest(`#${MENU_ID}`)) return;
+    if (event.type === 'pointerup' && event.pointerType === 'mouse') return;
+    const now = Date.now();
+    if (now - lastMenuLauncherActivation < 500) return;
+    lastMenuLauncherActivation = now;
+    openForum('home');
+}
+
+function installMenuLauncherCapture() {
+    if (launcherCaptureInstalled) return;
+    launcherCaptureInstalled = true;
+    document.addEventListener('click', handleMenuLauncherActivation, true);
+    document.addEventListener('pointerup', handleMenuLauncherActivation, true);
+    document.addEventListener('touchend', handleMenuLauncherActivation, { capture: true, passive: true });
+}
+
 function installLaunchers() {
     if (!document.getElementById(MENU_ID)) {
         const menu = document.getElementById('extensionsMenu');
@@ -2539,9 +2559,12 @@ function installLaunchers() {
             item.id = MENU_ID;
             item.className = 'list-group-item flex-container flexGap5 interactable tavern-forum-launcher';
             item.tabIndex = 0;
+            item.setAttribute('role', 'listitem');
             item.innerHTML = `${icon('message')}<span>打开微坛</span><i class="tf-menu-dot"></i>`;
-            item.addEventListener('click', () => openForum('home'));
-            menu.append(item);
+            const container = document.createElement('div');
+            container.className = 'extension_container tavern-forum-menu-container';
+            container.append(item);
+            menu.append(container);
         }
     }
     if (!document.getElementById(FAB_ID)) {
@@ -2629,6 +2652,7 @@ export async function initializeForumUi() {
     }
     document.addEventListener('keydown', event => { if (event.key === 'Escape' && viewState.open) closeForum(); });
     window.addEventListener('resize', updateLaunchers);
+    installMenuLauncherCapture();
     installLaunchers();
     bindSillyTavernEvents();
     viewState.initialized = true;

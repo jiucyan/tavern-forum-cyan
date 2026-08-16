@@ -152,4 +152,4 @@ npm run check
 npm run test:visual
 ```
 
-项目采用 MIT License。当前扩展版本为 `0.7.1`，数据结构版本为 `9`。
+项目采用 MIT License。当前扩展版本为 `0.7.2`，数据结构版本为 `9`。
