@@ -1,5 +1,9 @@
 import { createId } from './prompt.js';
 
+function hasOwn(target, key) {
+    return Object.prototype.hasOwnProperty.call(target, key);
+}
+
 function text(value, fallback = '') {
     return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -271,10 +275,10 @@ export function normalizeForumDataShape(data) {
     }
 
     for (const npc of normalized.npcs) {
-        const hadProfileGenerated = Object.hasOwn(npc, 'profileGenerated');
+        const hadProfileGenerated = hasOwn(npc, 'profileGenerated');
         const defaults = createNpc(npc);
         for (const [key, value] of Object.entries(defaults)) {
-            if (!Object.hasOwn(npc, key) || npc[key] === null) npc[key] = value;
+            if (!hasOwn(npc, key) || npc[key] === null) npc[key] = value;
         }
         npc.tags = Array.isArray(npc.tags) ? npc.tags : [];
         if (!hadProfileGenerated && text(npc.persona)) npc.profileGenerated = true;
@@ -298,7 +302,7 @@ export function normalizeForumDataShape(data) {
     for (const conversation of normalized.conversations) {
         const defaults = createConversation(conversation);
         for (const [key, value] of Object.entries(defaults)) {
-            if (!Object.hasOwn(conversation, key) || conversation[key] === null) conversation[key] = value;
+            if (!hasOwn(conversation, key) || conversation[key] === null) conversation[key] = value;
         }
         conversation.type = ['char', 'npc', 'role_dm'].includes(conversation.type) ? conversation.type : 'npc';
         conversation.participantIds = conversation.type === 'role_dm'

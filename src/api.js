@@ -96,7 +96,7 @@ function setParameterPath(target, path, value) {
         if (!cursor[part] || typeof cursor[part] !== 'object' || Array.isArray(cursor[part])) cursor[part] = {};
         cursor = cursor[part];
     }
-    cursor[parts.at(-1)] = value;
+    cursor[parts[parts.length - 1]] = value;
 }
 
 export function buildTextRequestBody(config, request) {

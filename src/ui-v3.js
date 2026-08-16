@@ -221,7 +221,12 @@ function icon(name, className = '') {
 }
 
 function escapeHtml(value) {
-    return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function buildGenerationTrace(text, reasoning = '') {
@@ -570,7 +575,7 @@ function renderConversationList(data) {
     const roleDmEnabled = getSettings().social.roleDirectMessages;
     const availableRoles = getRoleLibrary(data).filter(npc => !npc.systemRole && !npc.blocked && !data.conversations.some(item => item.type === 'npc' && item.targetId === npc.id));
     return `<aside class="tf-dm-list"><header><h2>消息</h2><div><button class="tf-icon-button" data-action="new-dm-npc" title="新建用户与角色私信">${icon('plus')}</button><button class="tf-icon-button" data-action="new-role-dm" title="新建角色之间私信" ${roleDmEnabled ? '' : 'disabled'}>${icon('users')}</button></div></header><div class="tf-dm-contacts">${conversations.map(conversation => {
-        const last = conversation.messages.at(-1);
+        const last = conversation.messages[conversation.messages.length - 1];
         return `<button class="tf-dm-contact ${conversation.id === viewState.selectedConversationId ? 'is-active' : ''}" data-action="open-conversation" data-conversation-id="${escapeHtml(conversation.id)}" data-contact-search="${escapeHtml(`${conversation.name} ${conversation.handle}`.toLocaleLowerCase())}">${conversation.type === 'role_dm' ? `<span class="tf-private-avatar">${icon('lock')}</span>` : renderAvatar(conversation.name, { avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey })}<div><b>${escapeHtml(conversation.name)}${conversation.type === 'role_dm' ? '<small> 私密</small>' : ''}</b><p>${escapeHtml(last?.content || (conversation.type === 'char' ? '酒馆当前 Char' : '开始一段私信'))}</p></div>${conversation.unread ? `<span>${conversation.unread}</span>` : ''}</button>`;
     }).join('')}</div><section class="tf-new-contacts"><h3>开始新私信</h3>${availableRoles.slice(0, 8).map(npc => `<button data-action="start-npc-dm" data-npc-id="${escapeHtml(npc.id)}">${renderAvatar(npc.name, { avatarUrl: npc.avatarUrl, avatarKey: npc.avatarKey })}<span>${escapeHtml(npc.name)}</span>${icon('chevron')}</button>`).join('') || '<p>只有已生成人设并进入角色库的角色可以开启新私信</p>'}${roleDmEnabled ? '<button class="tf-role-dm-entry" data-action="new-role-dm">＋ 创建 A 与 B 的私密对话</button>' : '<p class="tf-private-note">角色之间私信当前关闭，可在“我 → 信息边界”开启。</p>'}</section></aside>`;
 }
@@ -2570,9 +2575,15 @@ function installLaunchers() {
 }
 
 function openForum(tab = '') {
-    if (tab) getSettings().ui.activeTab = ['home', 'messages', 'me'].includes(tab) ? tab : 'home';
-    viewState.open = true;
-    render();
+    try {
+        if (tab) getSettings().ui.activeTab = ['home', 'messages', 'me'].includes(tab) ? tab : 'home';
+        viewState.open = true;
+        render();
+    } catch (error) {
+        viewState.open = false;
+        console.error('[微坛] 打开界面失败', error);
+        globalThis.toastr?.error?.(`微坛打开失败：${error?.message || error}`);
+    }
 }
 
 function closeForum() {

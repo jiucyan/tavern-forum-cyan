@@ -13,20 +13,28 @@ import { normalizeForumDataShape } from './forum.js';
 import { buildForumInjection, buildNpcInjection, createId, formatChatContext } from './prompt.js';
 
 const sessionSecrets = { text: new Map(), image: new Map() };
-let volatileForumData = structuredClone(EMPTY_FORUM_DATA);
+
+function clone(value) {
+    if (typeof globalThis.structuredClone === 'function') {
+        return globalThis.structuredClone(value);
+    }
+    return JSON.parse(JSON.stringify(value));
+}
+
+function hasOwn(target, key) {
+    return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+let volatileForumData = clone(EMPTY_FORUM_DATA);
 
 function getContext() {
     if (!globalThis.SillyTavern?.getContext) throw new Error('没有检测到 SillyTavern 上下文');
     return globalThis.SillyTavern.getContext();
 }
 
-function clone(value) {
-    return structuredClone(value);
-}
-
 function mergeDefaults(target, defaults) {
     for (const [key, value] of Object.entries(defaults)) {
-        if (!Object.hasOwn(target, key) || target[key] === null) {
+        if (!hasOwn(target, key) || target[key] === null) {
             target[key] = clone(value);
         } else if (value && typeof value === 'object' && !Array.isArray(value)
             && target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])) {
@@ -54,7 +62,7 @@ function normalizeProfile(profile, index = 0) {
         }))
         : [];
     const image = profile.image && typeof profile.image === 'object' ? profile.image : {};
-    const hadImageEnabledSwitch = Object.hasOwn(image, 'enabled');
+    const hadImageEnabledSwitch = hasOwn(image, 'enabled');
     profile.image = mergeDefaults(image, template.image);
     if (!hadImageEnabledSwitch && (profile.image.endpoint || profile.image.model)) profile.image.enabled = true;
     return profile;
@@ -258,7 +266,7 @@ export function updateApiConfig(kind, field, value) {
     const settings = getSettings();
     const profile = getActiveApiProfile();
     const normalizedKind = kind === 'image' ? 'image' : 'text';
-    if (!Object.hasOwn(profile[normalizedKind], field) || field === 'apiKey') return false;
+    if (!hasOwn(profile[normalizedKind], field) || field === 'apiKey') return false;
     profile[normalizedKind][field] = value;
     saveSettings();
     return true;
@@ -386,7 +394,7 @@ function hasSelectedWorldInfoEntry(settings, book) {
 }
 
 export function isWorldInfoBookEnabled(settings, book, characterBound = false) {
-    if (Object.hasOwn(settings.sources.worldInfoBooks, book)) return settings.sources.worldInfoBooks[book] !== false;
+    if (hasOwn(settings.sources.worldInfoBooks, book)) return settings.sources.worldInfoBooks[book] !== false;
     if (characterBound) return true;
     return hasSelectedWorldInfoEntry(settings, book);
 }
@@ -408,7 +416,7 @@ export async function getWorldInfoCatalog() {
             const enabled = isWorldInfoBookEnabled(settings, book, characterBound);
             const entries = Object.entries(data?.entries || {}).map(([recordKey, entry]) => {
                 const key = makeWorldInfoEntryKey(book, entry.uid ?? recordKey);
-                const explicitlySelected = Object.hasOwn(settings.sources.worldInfoEntries, key);
+                const explicitlySelected = hasOwn(settings.sources.worldInfoEntries, key);
                 return {
                 book,
                 uid: entry.uid ?? recordKey,

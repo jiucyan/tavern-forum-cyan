@@ -63,11 +63,11 @@ const viewState = {
 
 function escapeHtml(value) {
     return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;');
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 function notify(type, message) {
@@ -886,7 +886,10 @@ async function handleRootClick(event) {
         viewState.expandedComments.add(postId);
         viewState.replyTarget = { postId, commentId: target.dataset.commentId || '', handle: target.dataset.replyHandle || post.handle };
         render();
-        getRoot().querySelector(`[data-post-id="${CSS.escape(postId)}"] .tf-reply-content`)?.focus();
+        const escapedPostId = typeof globalThis.CSS?.escape === 'function'
+            ? globalThis.CSS.escape(postId)
+            : String(postId).replace(/[^a-zA-Z0-9_-]/g, character => `\\${character}`);
+        getRoot().querySelector(`[data-post-id="${escapedPostId}"] .tf-reply-content`)?.focus();
         return;
     }
     if (action === 'cancel-reply' && post) {

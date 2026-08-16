@@ -198,6 +198,10 @@ export function createId(prefix = 'item') {
     return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function hasOwn(target, key) {
+    return Object.prototype.hasOwnProperty.call(target, key);
+}
+
 export function formatChatContext(chat, limit = 20, names = {}) {
     if (!Array.isArray(chat) || chat.length === 0) return '';
 
@@ -377,7 +381,7 @@ function readJavaScriptString(source, start) {
             n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v', 0: '\0',
             '\\': '\\', '"': '"', "'": "'", '`': '`', '/': '/',
         };
-        if (Object.hasOwn(simpleEscapes, escaped)) {
+        if (hasOwn(simpleEscapes, escaped)) {
             value += simpleEscapes[escaped];
             continue;
         }
