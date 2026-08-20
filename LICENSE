@@ -1,21 +1,139 @@
-MIT License
+Tavern Forum Non-Commercial License v1.0
 
 Copyright (c) 2026 Tavern Forum Contributors
+All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Permission is granted to use, copy, and privately modify this software and its associated documentation files (the "Software"), subject to the following terms and conditions.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Non-Commercial Use
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+The Software may be used free of charge for personal, educational, research, hobby, and other non-commercial purposes.
+
+Commercial use of the Software is prohibited unless permission has first been obtained from the author(s).
+
+Commercial use includes, but is not limited to:
+
+- selling the Software or modified versions of the Software;
+- charging users for access to the Software or its functionality;
+- including the Software in a paid product, service, subscription, or package;
+- using the Software primarily to provide a paid commercial service;
+- commercially sublicensing, licensing, or redistributing the Software;
+- receiving payment specifically in exchange for distribution, modification, or access to the Software.
+
+2. Private Modification
+
+You may modify, adapt, translate, customize, or otherwise create derivative versions of the Software for your own private and non-commercial use without requesting permission.
+
+This includes modifications made for purposes such as:
+
+- personal customization;
+- compatibility fixes;
+- experimentation;
+- learning and development;
+- adapting the Software to your own SillyTavern environment;
+- private use among a small, closed group.
+
+Private modifications do not require prior authorization.
+
+3. Limited Private Sharing of Modified Versions
+
+Modified versions of the Software may be shared within a small and closed private group without prior authorization, provided that:
+
+- the sharing is entirely non-commercial;
+- access is limited to a closed group rather than the general public;
+- the modified version is not publicly advertised or promoted;
+- the modified version is not made available through a publicly accessible repository, website, download link, marketplace, or similar service;
+- this license and the original copyright notice are retained;
+- recipients are informed that further public redistribution requires authorization.
+
+A private group may include, for example, a closed group of friends, collaborators, testers, or members of a restricted community.
+
+A group is not considered private merely because access requires joining a publicly advertised group, server, channel, or community.
+
+4. Public Distribution of Modified Versions
+
+You may not publicly publish, distribute, release, upload, or otherwise make a modified or derivative version of the Software available to the general public unless you have first contacted the author(s) and obtained permission.
+
+This restriction includes, but is not limited to:
+
+- publishing a modified version on GitHub, GitLab, Gitee, or another public source-code hosting service;
+- publishing a modified fork;
+- releasing a modified package or archive;
+- publishing a modified SillyTavern extension;
+- distributing a modified version through a public website, forum, community, server, channel, marketplace, or file-sharing service;
+- publicly providing compiled, packaged, minified, or otherwise transformed versions derived from the Software.
+
+Creating a fork solely for private development is permitted if the fork remains private.
+
+A public fork containing modified versions of the Software requires permission from the author(s).
+
+5. Redistribution of the Original Unmodified Software
+
+You may redistribute complete and unmodified copies of the Software for non-commercial purposes without prior authorization, provided that:
+
+- the Software remains substantially unchanged;
+- the original copyright notice is retained;
+- this license is included in its entirety;
+- the original authorship is clearly preserved;
+- no fee is charged for the Software itself;
+- you do not falsely claim to be the original author or official maintainer;
+- you do not imply endorsement by the original project or its contributors.
+
+6. Attribution
+
+The original copyright notice and this license must be preserved in all permitted copies of the Software.
+
+You may not remove, conceal, or misrepresent copyright, authorship, attribution, or licensing information contained in the Software.
+
+Modification of the Software does not transfer ownership of the original Software to the modifier.
+
+7. Permission for Public Derivative Works
+
+The author(s) may authorize public distribution of modified or derivative versions on a case-by-case basis.
+
+Permission must be obtained before the modified version is publicly distributed.
+
+Unless otherwise agreed, permission to publish one specific derivative work does not automatically grant permission to:
+
+- publish future derivative versions;
+- use the Software commercially;
+- sublicense the Software;
+- authorize other parties to create or distribute derivative versions.
+
+Permission may be granted through any reasonable form of communication in which the author(s) clearly indicate approval.
+
+8. No Commercial Exploitation
+
+Unless separately permitted by the author(s), neither the original Software nor modified or derivative versions may be used for commercial exploitation.
+
+Non-commercial permission granted under this license does not constitute permission for commercial use.
+
+9. No Trademark or Official Endorsement Rights
+
+This license does not grant permission to use project names, logos, branding, or other identifiers in a manner that suggests an unofficial modified version is an official release.
+
+Modified versions must not falsely represent themselves as being officially produced, maintained, approved, or endorsed by the original project or its contributors.
+
+10. Exceptions
+
+The author(s) may grant additional permissions or exceptions to any term of this license.
+
+Such exceptions apply only to the persons, projects, versions, and uses specifically covered by that permission.
+
+11. Termination
+
+Any rights granted under this license automatically terminate if you violate its terms.
+
+Upon termination, you must cease unauthorized public distribution, commercial use, or other prohibited activities involving the Software.
+
+Permissions may be reinstated if the author(s) agree.
+
+12. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+IN NO EVENT SHALL THE AUTHORS, CONTRIBUTORS, OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OF THE SOFTWARE.
+
+---
+
+For permission regarding public distribution of modified versions, commercial use, or other uses not permitted by this license, please contact the author(s).
