@@ -341,17 +341,17 @@ test('role-to-role conversations are private and role memories stay isolated', (
     assert.match(request.system, /不得知道第三人的私信/);
 });
 
-test('facts and expanded social state migrate to v9', () => {
+test('facts and expanded social state migrate to v11', () => {
     const role = createNpc({ name: '甲', handle: 'a' });
     role.socialState = 'quarrel';
     const fact = createFact({ content: '只有甲知道', visibility: 'restricted', knownBy: [role.id] });
     const data = normalizeForumDataShape({ posts: [], npcs: [role], facts: [fact] });
-    assert.equal(data.version, 9);
+    assert.equal(data.version, 12);
     assert.equal(data.npcs[0].socialState, 'quarrel');
     assert.deepEqual(data.facts[0].knownBy, [role.id]);
 });
 
-test('v9 migration keeps engagement but removes only old forced image placeholders', () => {
+test('v10 migration keeps engagement but removes only old forced image placeholders', () => {
     const data = normalizeForumDataShape({ version: 8, posts: [
         { id: 'ai-one', author: '甲', handle: 'alpha', content: '第一条旧动态', imagePrompt: '与这篇动态相符的真实现场照片：第一条旧动态', likes: 7, reposts: 1, isAi: true, comments: [{ author: '乙', handle: 'beta', content: '旧评论', likes: 2, isAi: true }] },
         { id: 'ai-two', author: '丙', handle: 'gamma', content: '确实适合配图', imagePrompt: '雨夜列车进站的远景照片', likes: 6, reposts: 0, isAi: true, comments: [] },
@@ -394,7 +394,7 @@ test('current Char becomes a bound role with a built-in image avatar', () => {
 test('notifications migrate and preserve social types', () => {
     const notice = createNotification({ type: 'reply', actorName: '小北', postId: 'p1', content: '回复了你' });
     const data = normalizeForumDataShape({ posts: [], npcs: [], notifications: [notice] });
-    assert.equal(data.version, 9);
+    assert.equal(data.version, 12);
     assert.equal(data.notifications[0].type, 'reply');
     assert.equal(data.notifications[0].read, false);
 });

@@ -1,4 +1,5 @@
 import { createId } from './prompt.js';
+import { normalizeWorldState } from './world.js';
 
 function hasOwn(target, key) {
     return Object.prototype.hasOwnProperty.call(target, key);
@@ -37,7 +38,7 @@ export const DEFAULT_AVATARS = Object.freeze(DEFAULT_AVATAR_PALETTES.map((_, ind
     url: createDefaultAvatarDataUrl(`default-${index + 1}`, index),
 })));
 
-export function createNpc({ name = '新角色', handle = '', persona = '', inject = false, avatarUrl = '', avatarKey = '', avatarId = '', avatarCustomized = false, backgroundUrl = '', backgroundKey = '', bindingType = 'none', bindingTarget = '', bindingLabel = '', bindingContent = '', systemRole = false } = {}) {
+export function createNpc({ name = '新角色', handle = '', persona = '', inject = false, avatarUrl = '', avatarKey = '', avatarId = '', avatarCustomized = false, backgroundUrl = '', backgroundKey = '', bindingType = 'none', bindingTarget = '', bindingLabel = '', bindingContent = '', systemRole = false, permissionRole = 'member' } = {}) {
     const normalizedHandle = text(handle, `role${Math.floor(Math.random() * 90000 + 10000)}`).replace(/^@/, '');
     const normalizedName = text(name, '新角色');
     return {
@@ -63,6 +64,8 @@ export function createNpc({ name = '新角色', handle = '', persona = '', injec
         bindingLabel: text(bindingLabel),
         bindingContent: text(bindingContent),
         systemRole: Boolean(systemRole),
+        permissionRole: text(permissionRole, 'member'),
+        dmAccess: 'undecided',
         followedByUser: false,
         followsUser: false,
         muted: false,
@@ -87,7 +90,7 @@ export function createNpc({ name = '新角色', handle = '', persona = '', injec
 }
 
 export function createConversation({ type = 'npc', targetId = '', name = '新联系人', handle = '', avatarUrl = '', participantIds = [] } = {}) {
-    const normalizedType = ['char', 'npc', 'role_dm'].includes(type) ? type : 'npc';
+    const normalizedType = ['char', 'npc', 'role_dm', 'companion'].includes(type) ? type : 'npc';
     return {
         id: createId('conversation'),
         type: normalizedType,
@@ -103,6 +106,26 @@ export function createConversation({ type = 'npc', targetId = '', name = '新联
         createdAt: Date.now(),
         updatedAt: Date.now(),
     };
+}
+
+export function ensureCompanionConversation(data) {
+    data.conversations = Array.isArray(data.conversations) ? data.conversations : [];
+    const companion = data.world?.companion || {};
+    let conversation = data.conversations.find(item => item.type === 'companion');
+    if (!conversation) {
+        conversation = createConversation({
+            type: 'companion',
+            targetId: 'world-companion',
+            name: companion.name || '旅伴',
+            handle: 'companion',
+            avatarUrl: companion.avatarUrl || '',
+        });
+        data.conversations.unshift(conversation);
+    } else {
+        conversation.name = text(companion.name, conversation.name);
+        conversation.avatarUrl = text(companion.avatarUrl, conversation.avatarUrl);
+    }
+    return conversation;
 }
 
 export function ensureRoleConversation(data, firstNpc, secondNpc) {
@@ -191,13 +214,14 @@ export function ensureCharacterRole(data, snapshot = {}) {
 export function normalizeForumDataShape(data) {
     const normalized = data && typeof data === 'object' ? data : {};
     const previousVersion = Number(normalized.version || 0);
-    normalized.version = 9;
+    normalized.version = 12;
     normalized.topic = text(normalized.topic, '故事广场');
     normalized.posts = Array.isArray(normalized.posts) ? normalized.posts : [];
     normalized.npcs = Array.isArray(normalized.npcs) ? normalized.npcs : [];
     normalized.conversations = Array.isArray(normalized.conversations) ? normalized.conversations : [];
     normalized.notifications = Array.isArray(normalized.notifications) ? normalized.notifications : [];
     normalized.facts = Array.isArray(normalized.facts) ? normalized.facts : [];
+    normalized.world = normalizeWorldState(normalized.world);
     normalized.lastGenerationTrace = text(normalized.lastGenerationTrace).slice(0, 40000);
     normalized.lastGenerationAt = Math.max(0, Number(normalized.lastGenerationAt || 0));
     normalized.generationLogs = Array.isArray(normalized.generationLogs)
@@ -241,6 +265,15 @@ export function normalizeForumDataShape(data) {
             post.imagePrompt = '';
         }
         post.storyRelevance = Math.min(100, Math.max(0, Number(post.storyRelevance || 0)));
+        const moderation = post.moderation && typeof post.moderation === 'object' ? post.moderation : {};
+        post.moderation = {
+            hidden: Boolean(moderation.hidden),
+            action: ['hide', 'delete', 'warn'].includes(moderation.action) ? moderation.action : '',
+            reason: text(moderation.reason),
+            warning: text(moderation.warning),
+            actorNpcId: text(moderation.actorNpcId),
+            updatedAt: Math.max(0, Number(moderation.updatedAt || 0)),
+        };
         if (post.poll && typeof post.poll === 'object') {
             post.poll.question = text(post.poll.question, '投票');
             post.poll.multiple = Boolean(post.poll.multiple);
@@ -286,6 +319,8 @@ export function normalizeForumDataShape(data) {
         npc.muted = Boolean(npc.muted);
         npc.blocked = Boolean(npc.blocked);
         npc.socialState = ['normal', 'friendly', 'quarrel', 'blocked'].includes(npc.socialState) ? npc.socialState : 'normal';
+        npc.permissionRole = text(npc.permissionRole, 'member');
+        npc.dmAccess = ['undecided', 'allowed', 'denied'].includes(npc.dmAccess) ? npc.dmAccess : 'undecided';
         if (npc.blocked) npc.socialState = 'blocked';
         const memory = npc.memory && typeof npc.memory === 'object' ? npc.memory : {};
         npc.memory = {
@@ -304,7 +339,7 @@ export function normalizeForumDataShape(data) {
         for (const [key, value] of Object.entries(defaults)) {
             if (!hasOwn(conversation, key) || conversation[key] === null) conversation[key] = value;
         }
-        conversation.type = ['char', 'npc', 'role_dm'].includes(conversation.type) ? conversation.type : 'npc';
+        conversation.type = ['char', 'npc', 'role_dm', 'companion'].includes(conversation.type) ? conversation.type : 'npc';
         conversation.participantIds = conversation.type === 'role_dm'
             ? [...new Set((conversation.participantIds || []).map(String))].slice(0, 2)
             : [];
@@ -323,10 +358,14 @@ export function normalizeForumDataShape(data) {
     }
     for (const notification of normalized.notifications) {
         notification.id ||= createId('notification');
-        notification.type = ['reply', 'mention', 'like', 'follow', 'mutual', 'system'].includes(notification.type) ? notification.type : 'system';
+        notification.type = ['reply', 'mention', 'like', 'follow', 'mutual', 'system', 'tasks', 'companion', 'health', 'moderation'].includes(notification.type) ? notification.type : 'system';
+        notification.category = text(notification.category, notification.type);
         notification.actorNpcId ||= '';
         notification.actorName = text(notification.actorName, '微坛');
         notification.postId ||= '';
+        notification.conversationId ||= '';
+        notification.moduleId ||= '';
+        notification.itemId ||= '';
         notification.content = text(notification.content);
         notification.read = Boolean(notification.read);
         notification.createdAt ||= Date.now();
@@ -394,13 +433,17 @@ export function connectGeneratedReposts(existingPosts = [], generatedPosts = [])
     return connected;
 }
 
-export function createNotification({ type = 'system', actorNpcId = '', actorName = '微坛', postId = '', content = '' } = {}) {
+export function createNotification({ type = 'system', category = '', actorNpcId = '', actorName = '微坛', postId = '', conversationId = '', moduleId = '', itemId = '', content = '' } = {}) {
     return {
         id: createId('notification'),
-        type: ['reply', 'mention', 'like', 'follow', 'mutual', 'system'].includes(type) ? type : 'system',
+        type: ['reply', 'mention', 'like', 'follow', 'mutual', 'system', 'tasks', 'companion', 'health', 'moderation'].includes(type) ? type : 'system',
+        category: text(category, type),
         actorNpcId: text(actorNpcId),
         actorName: text(actorName, '微坛'),
         postId: text(postId),
+        conversationId: text(conversationId),
+        moduleId: text(moduleId),
+        itemId: text(itemId),
         content: text(content),
         read: false,
         createdAt: Date.now(),

@@ -4,7 +4,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "Tavern Forum Contributors",
-  "version": "0.7.3",
+  "version": "0.9.0",
   "homePage": "https://github.com/jiucyan/tavern-forum-cyan",
   "auto_update": true,
   "minimum_client_version": "1.17.0",

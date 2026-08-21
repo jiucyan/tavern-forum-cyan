@@ -1,5 +1,17 @@
 import { extractAssistantReasoning, extractAssistantText } from './prompt.js';
 
+const lastRequestAt = new Map();
+
+async function respectRateLimit(config) {
+    const rpm = Math.min(600, Math.max(0, Number(config?.rpm || 0)));
+    if (!rpm) return;
+    const key = `${config?.profileId || config?.provider || 'default'}:${config?.moduleId || 'shared'}`;
+    const interval = Math.ceil(60000 / rpm);
+    const wait = Math.max(0, interval - (Date.now() - Number(lastRequestAt.get(key) || 0)));
+    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+    lastRequestAt.set(key, Date.now());
+}
+
 function cleanEndpoint(value) {
     return String(value || '').trim().replace(/\/+$/, '');
 }
@@ -115,6 +127,7 @@ export function buildTextRequestBody(config, request) {
 }
 
 export async function generateForumTextResult(config, request, { captureTrace = false } = {}) {
+    await respectRateLimit(config);
     if (config?.provider === 'sillytavern') {
         const context = globalThis.SillyTavern?.getContext?.();
         const generateRaw = context?.generateRaw;

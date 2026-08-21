@@ -1,4 +1,5 @@
 import { generateForumImage, generateForumText, generateForumTextResult } from './api.js';
+import { DEFAULT_BUILTIN_PROMPTS, DEFAULT_SETTINGS, WORLD_MODULE_DEFINITIONS } from './constants.js';
 import {
     buildDirectMessageRequest,
     buildForumGenerationRequest,
@@ -28,6 +29,7 @@ import {
     DEFAULT_AVATARS,
     ensureCharacterConversation,
     ensureCharacterRole,
+    ensureCompanionConversation,
     ensureNpcConversation,
     ensureRoleConversation,
     linkNpcAuthors,
@@ -38,6 +40,7 @@ import {
     deleteApiProfile,
     getActiveApiProfile,
     getApiConfig,
+    getModuleApiConfig,
     getCharacterCatalog,
     getChatSnapshot,
     getForumData,
@@ -56,6 +59,25 @@ import {
     syncInjection,
     updateApiConfig,
 } from './store.js';
+import {
+    applyModerationProposal,
+    applyWorldUpdates,
+    buildLinkedWorldInstruction,
+    buildWorldModuleInjection,
+    buildWorldModuleRequest,
+    createPostReport,
+    getModuleDefinition,
+    getPermissionLevel,
+    createLocalFortune,
+    createLocalHealthEvent,
+    evaluateModuleGeneration,
+    filterWorldUpdatesBySafety,
+    isQuietHours,
+    normalizeWorldUpdates,
+    normalizeProactiveDirectMessages,
+    roleCan,
+    setModuleDecision,
+} from './world.js';
 
 const ROOT_ID = 'tavern-forum-root';
 const FAB_ID = 'tavern-forum-fab';
@@ -63,6 +85,38 @@ const MENU_ID = 'tavern-forum-menu-item';
 const SETTINGS_BLOCK_ID = 'tavern-forum-settings-block';
 let launcherCaptureInstalled = false;
 let lastMenuLauncherActivation = 0;
+const COMPANION_SPECIES = Object.freeze([
+    { id: 'frog', name: '青蛙' },
+    { id: 'cat', name: '黑猫' },
+    { id: 'rabbit', name: '垂耳兔' },
+    { id: 'fox', name: '赤狐' },
+    { id: 'penguin', name: '小企鹅' },
+    { id: 'robo-bird', name: '机械鸟' },
+]);
+const COMPANION_DEVICE_SKINS = Object.freeze([
+    { id: 'classic', name: '经典蛋机', note: '圆润三键 · 绿屏' },
+    { id: 'pocket', name: '口袋掌机', note: '十字键 · 横向面板' },
+    { id: 'crystal', name: '透明糖果机', note: '半透明外壳 · 蓝屏' },
+    { id: 'arcane', name: '魔法通讯器', note: '符文边框 · 紫晶屏' },
+    { id: 'terminal', name: '机械终端', note: '金属机身 · 琥珀屏' },
+]);
+const COMPANION_FOODS = Object.freeze([
+    { id: 'bug-cookie', symbol: '✹', name: '虫虫饼', satiety: 22, energy: 4, happiness: 7 },
+    { id: 'fish-flake', symbol: '≋', name: '小鱼片', satiety: 24, energy: 5, happiness: 8 },
+    { id: 'carrot-cube', symbol: '◆', name: '胡萝卜块', satiety: 20, energy: 6, happiness: 7 },
+    { id: 'berry', symbol: '●', name: '森林莓果', satiety: 16, energy: 5, happiness: 10 },
+    { id: 'seed-mix', symbol: '⁙', name: '谷物种子', satiety: 18, energy: 7, happiness: 6 },
+    { id: 'battery', symbol: '▣', name: '迷你电池', satiety: 25, energy: 14, happiness: 5 },
+]);
+const COMPANION_HABITS = Object.freeze({
+    frog: { favorite: 'bug-cookie', likes: ['berry'], pet: '青蛙眯起眼，前爪轻轻拍了拍屏幕。', play: '它追着光点跳过三片像素荷叶。', rest: '它缩进湿润的小窝，呼吸慢慢平稳。', weather: { sunny: ['暖洋洋地趴在水边晒背。', '惬意'], cloudy: ['它抬头盯着云层，像在等雨。', '期待'], rain: ['雨声一响，它立刻活跃地蹦了起来！', '雀跃'], wind: ['它压低身体，认真听风穿过草叶。', '专注'], snow: ['它把脚趾收起来，悄悄靠近了暖灯。', '怕冷'] } },
+    cat: { favorite: 'fish-flake', likes: ['berry'], pet: '黑猫先矜持地躲了一下，又把额头递了过来。', play: '它扑住像素毛线，尾巴得意地甩了两圈。', rest: '它把自己盘成一团，发出很轻的呼噜声。', weather: { sunny: ['它占住最暖的光斑，舒服地翻了个身。', '慵懒'], cloudy: ['它窝在窗边，安静观察远处的影子。', '平静'], rain: ['雨点让它的耳朵一抖一抖，暂时不想出门。', '谨慎'], wind: ['它追着被风吹动的叶影，瞳孔亮了起来。', '好奇'], snow: ['它对雪点伸出爪子，又迅速缩了回来。', '新奇'] } },
+    rabbit: { favorite: 'carrot-cube', likes: ['berry', 'seed-mix'], pet: '垂耳兔把耳朵放松下来，鼻尖轻轻动了动。', play: '它绕着小窝跳了一圈，又钻进纸盒隧道。', rest: '它把干草拢成小窝，安静地伏了下来。', weather: { sunny: ['它在柔和的阳光里梳理长耳朵。', '舒展'], cloudy: ['它靠着小窝边缘，安心地嚼着草。', '安稳'], rain: ['它侧耳听雨，把自己藏进了干燥角落。', '安静'], wind: ['耳朵被风声吸引，警觉地转向窗外。', '警觉'], snow: ['它兴奋地看着白点，却更喜欢暖和的室内。', '兴奋'] } },
+    fox: { favorite: 'berry', likes: ['fish-flake'], pet: '赤狐绕过你的手，最后用尾巴轻轻扫了一下。', play: '它假装埋伏，突然扑向飞过的像素光点。', rest: '它用大尾巴盖住鼻尖，蜷成暖暖的一团。', weather: { sunny: ['它伏在阴影边缘，耐心观察来往动静。', '机敏'], cloudy: ['微暗的天色让它更愿意四处探索。', '活跃'], rain: ['它闻了闻潮湿空气，像发现了新的气味。', '好奇'], wind: ['顺风带来远处的味道，它的耳朵立了起来。', '专注'], snow: ['它在雪地里留下轻快脚印，尾巴像一团火。', '雀跃'] } },
+    penguin: { favorite: 'fish-flake', likes: ['berry'], pet: '小企鹅挺起胸口，开心地拍了拍短翅。', play: '它用肚皮滑过屏幕，转了一圈才停下。', rest: '它把喙藏到翅膀下，稳稳站着睡着了。', weather: { sunny: ['它躲到凉快处，认真保护自己的冰块。', '怕热'], cloudy: ['温度刚刚好，它慢悠悠巡视小窝。', '舒适'], rain: ['它把雨点当成小游戏，啪嗒啪嗒踩水。', '开心'], wind: ['它迎着风张开翅膀，像一艘小帆船。', '勇敢'], snow: ['雪一落下来，它立刻精神十足地滑了出去！', '兴奋'] } },
+    'robo-bird': { favorite: 'battery', likes: ['seed-mix'], pet: '触摸感应灯依次亮起，它回了一声清脆电子音。', play: '它展开小翼完成了一套精准的绕圈飞行。', rest: '机械鸟收起翼片，进入低功耗充电模式。', weather: { sunny: ['太阳能板充电效率提升，指示灯很明亮。', '满电'], cloudy: ['它调低屏幕亮度，平稳执行巡航程序。', '稳定'], rain: ['防水检测启动，它谨慎地收起外露接口。', '警戒'], wind: ['它校正陀螺仪，兴奋地测试逆风悬停。', '专注'], snow: ['除霜模块嗡嗡运转，机身冒出一点热气。', '忙碌'] } },
+    mystery: { favorite: 'berry', likes: COMPANION_FOODS.map(item => item.id), pet: '它用自己的方式回应了你的触碰。', play: '它围着光点开心地转了一圈。', rest: '它找到舒服的位置，安静休息起来。', weather: { sunny: ['它享受着小窝里的光。', '舒适'], cloudy: ['它安静地看着云层变化。', '平静'], rain: ['它听着雨声，显得若有所思。', '好奇'], wind: ['它追踪着风吹动的影子。', '专注'], snow: ['它第一次认真观察这些白色小点。', '新奇'] } },
+});
 const CUSTOM_STYLE_ID = 'tavern-forum-custom-css';
 const BUILTIN_CUSTOM_CSS_TEMPLATE = `/*
  * 微坛标准 CSS 美化模板
@@ -182,12 +236,32 @@ const viewState = {
     autoRefreshTimer: 0,
     pendingNpcAvatarId: '',
     pendingNpcBackgroundId: '',
+    pendingViewWallpaperId: '',
     feedMode: 'recommended',
     selectedTopic: '',
+    worldPage: '',
     composerPoll: null,
     openPostMenuId: '',
     openPostImageEditorId: '',
-    injectionTokens: { total: 0, forum: 0, roles: 0, loading: false },
+    injectionTokens: { total: 0, forum: 0, roles: 0, world: 0, modules: {}, loading: false },
+    moduleBusy: new Set(),
+    notificationFilter: 'all',
+    profileEditing: false,
+    profileTab: 'posts',
+    companionMenuIndex: 0,
+    companionProfileOpen: false,
+    companionFoodMenuOpen: false,
+    companionFoodIndex: 0,
+    renderedScrollKey: '',
+    homeScrollTop: 0,
+    storiesScrollLeft: 0,
+    settingsNavScrollLeft: 0,
+    pendingSettingsBlock: '',
+    settingsSearch: '',
+    settingsHighlight: '',
+    pendingModuleImportId: '',
+    openModuleToolsId: '',
+    toasts: [],
 };
 
 const ICONS = {
@@ -268,9 +342,30 @@ function isMyHandle(handle) {
     return normalized === 'me' || normalized === String(profile.handle || 'me').replace(/^@/, '').toLocaleLowerCase();
 }
 
+function getMyDisplayName() {
+    const configured = String(getSettings().profile.displayName || '').trim();
+    const snapshotName = getChatSnapshot().names.user || '我';
+    if (!configured || /\{\{\s*user\s*\}\}/i.test(configured)) return snapshotName;
+    return configured;
+}
+
 function notify(type, message) {
-    if (globalThis.toastr?.[type]) globalThis.toastr[type](message);
-    else console[type === 'error' ? 'error' : 'log'](`[微坛] ${message}`);
+    const level = ['success', 'warning', 'error', 'info'].includes(type) ? type : 'info';
+    const item = { id: createId('toast'), type: level, message: String(message || ''), createdAt: Date.now() };
+    viewState.toasts.push(item);
+    if (viewState.toasts.length > 4) viewState.toasts.splice(0, viewState.toasts.length - 4);
+    console[level === 'error' ? 'error' : level === 'warning' ? 'warn' : 'log'](`[微坛] ${item.message}`);
+    paintInAppToasts();
+    globalThis.setTimeout(() => {
+        viewState.toasts = viewState.toasts.filter(entry => entry.id !== item.id);
+        paintInAppToasts();
+    }, level === 'error' ? 7000 : 3600);
+}
+
+function paintInAppToasts() {
+    const host = getRoot()?.querySelector('.tf-in-app-toasts');
+    if (!host) return;
+    host.innerHTML = viewState.toasts.map(item => `<div class="tf-in-app-toast is-${escapeHtml(item.type)}" data-toast-id="${escapeHtml(item.id)}"><i></i><span>${escapeHtml(item.message)}</span><button data-action="dismiss-toast" data-toast-id="${escapeHtml(item.id)}" aria-label="关闭">${icon('close')}</button></div>`).join('');
 }
 
 function getRoot() {
@@ -338,9 +433,14 @@ function getRoleLibrary(data = getForumData()) {
 function renderStoredImage({ url = '', imageKey = '', alt = '', className = '' } = {}) {
     if (imageKey) {
         const value = imageMemory.get(imageKey);
-        return `<img class="${escapeHtml(className)}" ${value ? `src="${escapeHtml(value)}"` : `data-image-key="${escapeHtml(imageKey)}"`} alt="${escapeHtml(alt)}">`;
+        return `<img class="${escapeHtml(className)}" data-tf-image ${value ? `src="${escapeHtml(value)}"` : `data-image-key="${escapeHtml(imageKey)}"`} alt="${escapeHtml(alt)}">`;
     }
-    return isSafeImageUrl(url) ? `<img class="${escapeHtml(className)}" src="${escapeHtml(url)}" alt="${escapeHtml(alt)}">` : '';
+    return isSafeImageUrl(url) ? `<img class="${escapeHtml(className)}" data-tf-image src="${escapeHtml(url)}" alt="${escapeHtml(alt)}">` : '';
+}
+
+function hideBrokenStoredImage(event) {
+    const image = event.target;
+    if (image instanceof HTMLImageElement && image.matches('img[data-tf-image]')) image.hidden = true;
 }
 
 function renderAvatar(name, { large = false, npcId = '', avatarUrl = '', avatarKey = '', action = '' } = {}) {
@@ -351,7 +451,8 @@ function renderAvatar(name, { large = false, npcId = '', avatarUrl = '', avatarK
     const tag = clickable ? 'button' : 'span';
     const clickAction = action || (npcId ? 'open-npc' : '');
     const attrs = clickable ? `type="button" data-action="${clickAction}" ${npcId ? `data-npc-id="${escapeHtml(npcId)}"` : ''}` : '';
-    const content = renderStoredImage({ url, imageKey, alt: name }) || initials(name);
+    const storedImage = renderStoredImage({ url, imageKey, alt: name });
+    const content = storedImage ? `<span class="tf-avatar-fallback">${initials(name)}</span>${storedImage}` : initials(name);
     return `<${tag} class="tf-avatar ${large ? 'tf-avatar-large' : ''} ${clickable ? 'is-clickable' : ''}" style="--tf-avatar-hue:${avatarHue(name)}" ${attrs}>${content}</${tag}>`;
 }
 
@@ -429,7 +530,7 @@ function renderComments(post, forceOpen = false) {
         ${comments.length ? renderBranch() : '<p class="tf-empty-mini">还没有评论</p>'}
         <div class="tf-reply-composer">
             ${target ? `<div class="tf-reply-context">回复 @${escapeHtml(target.handle)}</div>` : ''}
-            <input class="tf-reply-author" value="${escapeHtml(profile.displayName || snapshot.names.user || '我')}" hidden><input class="tf-reply-handle" value="${escapeHtml(profile.handle || 'me')}" hidden>
+            <input class="tf-reply-author" value="${escapeHtml(getMyDisplayName())}" hidden><input class="tf-reply-handle" value="${escapeHtml(profile.handle || 'me')}" hidden>
             <textarea class="tf-reply-content" rows="2" maxlength="1500" placeholder="写下评论…"></textarea>
             <details class="tf-reply-image-options"><summary>${icon('image')}<span>添加图片</span></summary><div><input class="tf-reply-image-prompt" maxlength="500" placeholder="描述评论配图；没有生图 API 时显示为文字配图"></div></details>
             <button class="tf-circle-button" data-action="submit-reply" data-post-id="${escapeHtml(post.id)}" ${replying ? 'disabled' : ''} title="发布评论">${replying ? '<span class="tf-spinner"></span>' : icon('send')}</button>
@@ -467,8 +568,9 @@ function renderPost(post, { detail = false } = {}) {
         <header class="tf-post-header">
             ${renderAuthorAvatar(post)}
             ${authorHeader}
-            <div class="tf-post-menu-wrap"><button class="tf-icon-button" data-action="toggle-post-menu" data-post-id="${escapeHtml(post.id)}" title="帖子菜单">${icon('more')}</button>${viewState.openPostMenuId === post.id ? `<div class="tf-post-menu"><button data-action="toggle-post-injection" data-post-id="${escapeHtml(post.id)}">${icon('shield')}<span>${injecting ? '停止注入这篇帖子' : '将这篇帖子注入正文'}</span><i class="${injecting ? 'is-on' : ''}"></i></button><button data-action="favorite-post" data-post-id="${escapeHtml(post.id)}">${icon('bookmark')}<span>${post.favorite ? '取消收藏' : '收藏帖子'}</span></button>${moderationItems}<button class="is-danger" data-action="delete-post" data-post-id="${escapeHtml(post.id)}">${icon('trash')}<span>删除帖子</span></button></div>` : ''}</div>
+            <div class="tf-post-menu-wrap"><button class="tf-icon-button" data-action="toggle-post-menu" data-post-id="${escapeHtml(post.id)}" title="帖子菜单">${icon('more')}</button>${viewState.openPostMenuId === post.id ? `<div class="tf-post-menu"><button data-action="toggle-post-injection" data-post-id="${escapeHtml(post.id)}">${icon('shield')}<span>${injecting ? '停止注入这篇帖子' : '将这篇帖子注入正文'}</span><i class="${injecting ? 'is-on' : ''}"></i></button><button data-action="favorite-post" data-post-id="${escapeHtml(post.id)}">${icon('bookmark')}<span>${post.favorite ? '取消收藏' : '收藏帖子'}</span></button><button data-action="report-post" data-post-id="${escapeHtml(post.id)}">${icon('shield')}<span>举报帖子</span></button>${moderationItems}<button class="is-danger" data-action="delete-post" data-post-id="${escapeHtml(post.id)}">${icon('trash')}<span>删除帖子</span></button></div>` : ''}</div>
         </header>
+        ${post.moderation?.warning ? `<div class="tf-moderation-warning">${icon('shield')} ${escapeHtml(post.moderation.warning)}</div>` : ''}
         ${captionMarkup}
         ${post.repostOf ? `<div class="tf-repost-label">${icon('repost')} 转发 / 引用了一篇帖子</div>` : ''}
         ${post.quoteText ? `<blockquote class="tf-quote-post">${renderSocialText(post.quoteText)}</blockquote>` : ''}
@@ -494,7 +596,7 @@ function renderPostDetail(data, post) {
 function renderComposer() {
     const snapshot = getChatSnapshot();
     const profile = getSettings().profile;
-    const name = profile.displayName || snapshot.names.user || '我';
+    const name = getMyDisplayName();
     const avatar = renderAvatar(name, { avatarUrl: profile.avatarUrl, avatarKey: profile.avatarKey });
     if (!viewState.composerOpen) return `<button class="tf-compose-collapsed tf-card" data-action="toggle-composer">${avatar}<span>分享故事世界里的新鲜事…</span>${icon('plus')}</button>`;
     const poll = viewState.composerPoll;
@@ -508,6 +610,34 @@ function renderStories(data) {
     return `<section class="tf-stories tf-card">${people.map(person => `<button data-action="${person.isChar ? 'open-char-dm' : 'open-npc'}" ${person.id ? `data-npc-id="${escapeHtml(person.id)}"` : ''}>${renderAvatar(person.name, { avatarUrl: person.avatarUrl, avatarKey: person.avatarKey })}<span>${escapeHtml(person.name)}</span></button>`).join('')}</section>`;
 }
 
+function renderWorldPortal(data) {
+    const settings = getSettings();
+    const definitions = WORLD_MODULE_DEFINITIONS.filter(definition => !['forum', 'moderation'].includes(definition.id) && settings.modules[definition.id]?.enabled);
+    if (!definitions.length) return '';
+    const counts = {
+        moderation: data.world.reports.filter(item => ['pending', 'reviewing'].includes(item.status)).length,
+        tasks: data.world.tasks.filter(item => ['offered', 'accepted'].includes(item.status)).length,
+        fortune: data.world.fortune ? data.world.fortune.label : '',
+        travel: data.world.companion?.status === 'away' ? '外出中' : '在家',
+        inventory: data.world.inventory.filter(item => !item.consumed && item.quantity > 0).length,
+        health: data.world.health.filter(item => item.status !== 'resolved').length,
+    };
+    return `<nav class="tf-world-portal tf-card" aria-label="服务快捷入口">${definitions.map(definition => `<button data-action="open-world-page" data-module-id="${escapeHtml(definition.id)}"><span>${definition.id === 'travel' ? renderPixelCompanion(data.world.companion.species, data.world.companion.status, true) : icon(definition.icon)}</span><b>${escapeHtml(definition.name)}</b>${counts[definition.id] !== '' ? `<small>${escapeHtml(String(counts[definition.id]))}</small>` : ''}</button>`).join('')}</nav>`;
+}
+
+function renderServicesHub(data) {
+    const settings = getSettings();
+    const world = data.world;
+    const cards = [
+        ['travel', '旅伴', world.companion.status === 'away' ? `正在${world.companion.destination || '外面'}旅行` : `${world.companion.name}在小窝里`, world.companion.status === 'away' ? '旅途中' : '可互动'],
+        ['health', '健康与医疗', world.health.find(item => item.status !== 'resolved')?.name || '记录日常身体事件与就医过程', `${world.health.filter(item => item.status !== 'resolved').length} 项进行中`],
+        ['tasks', '委托', world.tasks.find(item => ['offered', 'accepted'].includes(item.status))?.title || '查看角色与社区发来的委托', `${world.tasks.filter(item => ['offered', 'accepted'].includes(item.status)).length} 件待办`],
+        ['fortune', '今日运势', world.fortune?.summary || '抽一张只在本地计算的今日签', world.fortune?.label || '尚未抽取'],
+        ['inventory', '背包', world.inventory.find(item => !item.consumed)?.name || '旅途纪念与任务物品会收进这里', `${world.inventory.filter(item => !item.consumed && item.quantity > 0).length} 种物品`],
+    ].filter(([id]) => settings.modules[id]?.enabled);
+    return `<section class="tf-services-page"><header class="tf-services-hero"><div><small>COMMUNITY SERVICES</small><h1>服务</h1><p>这些功能在论坛内独立运行；是否送进酒馆正文，仍由各模块原有的注入开关决定。</p></div><span>${cards.length} 项已启用</span></header>${cards.length ? `<div class="tf-service-grid">${cards.map(([id, name, summary, state]) => `<button class="tf-service-card tf-card is-${id}" data-action="open-world-page" data-module-id="${id}"><span class="tf-service-icon">${id === 'travel' ? renderPixelCompanion(world.companion.species, world.companion.status, true) : icon(getModuleDefinition(id)?.icon || 'sparkles')}</span><div><small>${escapeHtml(state)}</small><h2>${escapeHtml(name)}</h2><p>${escapeHtml(summary)}</p></div>${icon('chevron')}</button>`).join('')}</div>` : `<section class="tf-card tf-empty tf-service-empty"><div class="tf-empty-icon">${icon('sparkles')}</div><h3>还没有启用服务</h3><p>可从右上角设置进入“功能与联动”开启。</p><button class="tf-primary-button" data-action="open-settings" data-section="modules">去设置</button></section>`}</section>`;
+}
+
 function getFeedPosts(data) {
     const normalizeHandle = value => String(value || '').replace(/^@/, '').trim().toLocaleLowerCase();
     const normalizeName = value => String(value || '').trim().toLocaleLowerCase();
@@ -519,7 +649,7 @@ function getFeedPosts(data) {
         || data.npcs.find(npc => normalizeName(npc.name) && normalizeName(npc.name) === normalizeName(post.author));
     const visible = data.posts.filter(post => {
         const npc = roleForPost(post);
-        return !npc?.muted && !npc?.blocked && (!viewState.selectedTopic || (post.tags || []).some(tag => String(tag).toLocaleLowerCase() === viewState.selectedTopic.toLocaleLowerCase()));
+        return !post.moderation?.hidden && !npc?.muted && !npc?.blocked && (!viewState.selectedTopic || (post.tags || []).some(tag => String(tag).toLocaleLowerCase() === viewState.selectedTopic.toLocaleLowerCase()));
     });
     if (viewState.feedMode === 'following') return visible.filter(post => isMyHandle(post.handle) || data.npcs.some(npc => npc.followedByUser && roleMatchesPost(npc, post))).sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
     if (viewState.feedMode === 'latest') return visible.sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
@@ -535,11 +665,15 @@ function getFeedPosts(data) {
 
 function renderHome(data) {
     const active = hasActiveChat();
+    const forumEnabled = getSettings().modules.forum.enabled;
     const posts = getFeedPosts(data);
     const feeds = [['following', '关注'], ['recommended', '推荐'], ['latest', '最新'], ['hot', '热门']];
+    const fortune = getSettings().modules.fortune.enabled && data.world.fortune
+        ? `<button class="tf-fortune-glance tf-card" data-action="open-world-page" data-module-id="fortune"><span>${icon('sparkles')}</span><div><small>今天</small><b>${escapeHtml(data.world.fortune.label)}</b><p>${escapeHtml(data.world.fortune.summary)}</p></div>${icon('chevron')}</button>`
+        : '';
     return `<div class="tf-home-page"><div class="tf-feed-column">
-        <section class="tf-feed-heading"><div><h1>${escapeHtml(data.topic || '故事动态')}</h1><p>${active ? `${escapeHtml(getChatSnapshot().characterName)} · 当前聊天专属社区` : '请先打开一个角色聊天'}</p></div><button class="tf-primary-button" data-action="generate-posts" ${viewState.busy || !active ? 'disabled' : ''}>${viewState.busy ? '<span class="tf-spinner"></span>' : icon('sparkles')}<span>${viewState.busy ? '刷新中' : '刷新'}</span></button></section>
-        ${renderStories(data)}<nav class="tf-feed-tabs">${feeds.map(([id, label]) => `<button class="${viewState.feedMode === id ? 'is-active' : ''}" data-action="feed-mode" data-feed="${id}">${label}</button>`).join('')}</nav>${viewState.selectedTopic ? `<section class="tf-topic-header tf-card"><div><small>话题详情</small><h2>#${escapeHtml(viewState.selectedTopic)}</h2><p>${posts.length} 篇相关帖子</p></div><button class="tf-secondary-button" data-action="clear-topic">返回全部</button></section>` : ''}${renderComposer()}
+        <section class="tf-feed-heading"><div><h1>${escapeHtml(data.topic || '故事动态')}</h1><p>${!forumEnabled ? '论坛模块当前已暂停' : active ? `${escapeHtml(getChatSnapshot().characterName)} · 当前聊天专属社区` : '请先打开一个角色聊天'}</p></div><button class="tf-primary-button" data-action="generate-posts" ${viewState.busy || !active || !forumEnabled ? 'disabled' : ''}>${viewState.busy ? '<span class="tf-spinner"></span>' : icon('sparkles')}<span>${viewState.busy ? '刷新中' : '刷新'}</span></button></section>
+        ${renderStories(data)}${fortune}<nav class="tf-feed-tabs">${feeds.map(([id, label]) => `<button class="${viewState.feedMode === id ? 'is-active' : ''}" data-action="feed-mode" data-feed="${id}">${label}</button>`).join('')}</nav>${viewState.selectedTopic ? `<section class="tf-topic-header tf-card"><div><small>话题详情</small><h2>#${escapeHtml(viewState.selectedTopic)}</h2><p>${posts.length} 篇相关帖子</p></div><button class="tf-secondary-button" data-action="clear-topic">返回全部</button></section>` : ''}${renderComposer()}
         <div class="tf-search-result" ${viewState.searchQuery ? '' : 'hidden'}>搜索结果：<b data-search-count>0</b> 篇帖子</div>
         <div class="tf-feed-list">${viewState.busy ? '<div class="tf-card tf-skeleton"><i></i><p></p><p></p></div>' : ''}${posts.length ? posts.map(renderPost).join('') : '<section class="tf-card tf-empty"><div class="tf-empty-icon">'+icon('image')+'</div><h3>这里还没有动态</h3><p>可以切换信息流，或关注更多角色。</p></section>'}</div>
     </div></div>`;
@@ -564,6 +698,20 @@ function getConversationProfileNpc(data, conversation) {
     return null;
 }
 
+function strangerDmAllowed(npc, { decide = false } = {}) {
+    if (!npc || npc.systemRole || npc.followsUser) return true;
+    const settings = getSettings();
+    const policy = settings.social.directMessagePolicy;
+    if (policy === 'open') return true;
+    if (policy === 'following') return false;
+    if (npc.dmAccess === 'allowed') return true;
+    if (npc.dmAccess === 'denied') return false;
+    const seed = Array.from(`${npc.id}|${npc.handle}`).reduce((sum, char) => ((sum * 31) + char.codePointAt(0)) >>> 0, 2166136261);
+    const allowed = (seed % 100) >= Number(settings.social.strangerBlockChance || 0);
+    if (decide) npc.dmAccess = allowed ? 'allowed' : 'denied';
+    return allowed;
+}
+
 function isConversationAllowed(data, conversation) {
     if (!conversation) return false;
     if (conversation.type === 'role_dm') {
@@ -575,10 +723,10 @@ function isConversationAllowed(data, conversation) {
 function renderConversationList(data) {
     const conversations = [...data.conversations].filter(conversation => isConversationAllowed(data, conversation)).sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
     const roleDmEnabled = getSettings().social.roleDirectMessages;
-    const availableRoles = getRoleLibrary(data).filter(npc => !npc.systemRole && !npc.blocked && !data.conversations.some(item => item.type === 'npc' && item.targetId === npc.id));
+    const availableRoles = getRoleLibrary(data).filter(npc => !npc.systemRole && !npc.blocked && strangerDmAllowed(npc) && !data.conversations.some(item => item.type === 'npc' && item.targetId === npc.id));
     return `<aside class="tf-dm-list"><header><h2>消息</h2><div><button class="tf-icon-button" data-action="new-dm-npc" title="新建用户与角色私信">${icon('plus')}</button><button class="tf-icon-button" data-action="new-role-dm" title="新建角色之间私信" ${roleDmEnabled ? '' : 'disabled'}>${icon('users')}</button></div></header><div class="tf-dm-contacts">${conversations.map(conversation => {
         const last = conversation.messages[conversation.messages.length - 1];
-        return `<button class="tf-dm-contact ${conversation.id === viewState.selectedConversationId ? 'is-active' : ''}" data-action="open-conversation" data-conversation-id="${escapeHtml(conversation.id)}" data-contact-search="${escapeHtml(`${conversation.name} ${conversation.handle}`.toLocaleLowerCase())}">${conversation.type === 'role_dm' ? `<span class="tf-private-avatar">${icon('lock')}</span>` : renderAvatar(conversation.name, { avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey })}<div><b>${escapeHtml(conversation.name)}${conversation.type === 'role_dm' ? '<small> 私密</small>' : ''}</b><p>${escapeHtml(last?.content || (conversation.type === 'char' ? '酒馆当前 Char' : '开始一段私信'))}</p></div>${conversation.unread ? `<span>${conversation.unread}</span>` : ''}</button>`;
+        return `<button class="tf-dm-contact ${conversation.id === viewState.selectedConversationId ? 'is-active' : ''}" data-action="open-conversation" data-conversation-id="${escapeHtml(conversation.id)}" data-contact-search="${escapeHtml(`${conversation.name} ${conversation.handle}`.toLocaleLowerCase())}">${conversation.type === 'role_dm' ? `<span class="tf-private-avatar">${icon('lock')}</span>` : conversation.type === 'companion' ? renderCompanionAvatar(data) : renderAvatar(conversation.name, { avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey })}<div><b>${escapeHtml(conversation.name)}${conversation.type === 'role_dm' ? '<small> 私密</small>' : ''}</b><p>${escapeHtml(last?.content || (conversation.type === 'char' ? '酒馆当前 Char' : '开始一段私信'))}</p></div>${conversation.unread ? `<span>${conversation.unread}</span>` : ''}</button>`;
     }).join('')}</div><section class="tf-new-contacts"><h3>开始新私信</h3>${availableRoles.slice(0, 8).map(npc => `<button data-action="start-npc-dm" data-npc-id="${escapeHtml(npc.id)}">${renderAvatar(npc.name, { avatarUrl: npc.avatarUrl, avatarKey: npc.avatarKey })}<span>${escapeHtml(npc.name)}</span>${icon('chevron')}</button>`).join('') || '<p>只有已生成人设并进入角色库的角色可以开启新私信</p>'}${roleDmEnabled ? '<button class="tf-role-dm-entry" data-action="new-role-dm">＋ 创建 A 与 B 的私密对话</button>' : '<p class="tf-private-note">角色之间私信当前关闭，可在“我 → 信息边界”开启。</p>'}</section></aside>`;
 }
 
@@ -598,13 +746,23 @@ function renderDirectChat(data) {
     }
     const profileNpc = getConversationProfileNpc(data, conversation);
     const profileId = profileNpc?.id || '';
+    const companionAvatar = conversation.type === 'companion' ? renderCompanionAvatar(data) : '';
     const header = profileId
         ? `<button class="tf-dm-profile-link" data-action="open-npc" data-npc-id="${escapeHtml(profileId)}" title="查看 ${escapeHtml(conversation.name)} 的主页">${renderAvatar(conversation.name, { avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey })}<div><b>${escapeHtml(conversation.name)}</b><span>@${escapeHtml(conversation.handle)}</span></div></button><button class="tf-icon-button" data-action="open-npc" data-npc-id="${escapeHtml(profileId)}" title="查看主页">${icon('user')}</button>`
-        : `${renderAvatar(conversation.name, { avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey })}<div><b>${escapeHtml(conversation.name)}</b><span>@${escapeHtml(conversation.handle)}</span></div>`;
+        : `${companionAvatar || renderAvatar(conversation.name, { avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey })}<div><b>${escapeHtml(conversation.name)}</b><span>@${escapeHtml(conversation.handle)}</span></div>`;
     const welcomeAvatar = profileId
         ? renderAvatar(conversation.name, { large: true, npcId: profileId, avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey })
-        : renderAvatar(conversation.name, { large: true, avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey });
-    return `<section class="tf-dm-chat"><header><button class="tf-dm-mobile-back" data-action="back-dm-list" aria-label="返回联系人">${icon('chevron')}</button>${header}</header><div class="tf-dm-messages">${messages.length ? messages.map(message => `<div class="tf-dm-bubble ${message.role === 'user' ? 'is-me' : 'is-them'}"><p>${escapeHtml(message.content)}</p><time>${formatTime(message.createdAt)}</time></div>`).join('') : `<div class="tf-dm-welcome">${welcomeAvatar}<h3>${escapeHtml(conversation.name)}</h3><p>${conversation.type === 'char' ? '这是酒馆当前 Char 的独立私信。' : '这段对话使用该角色的人设。'}</p></div>`}</div><form class="tf-dm-composer" data-conversation-id="${escapeHtml(conversation.id)}"><textarea id="tf-dm-input" rows="1" maxlength="3000" placeholder="发消息…" ${viewState.dmBusy ? 'disabled' : ''}></textarea><div class="tf-dm-composer-actions"><button type="button" class="tf-circle-button tf-ai-reply-button" data-action="generate-dm-reply" data-conversation-id="${escapeHtml(conversation.id)}" ${viewState.dmBusy || !messages.length ? 'disabled' : ''} aria-label="生成 AI 回复">${viewState.dmBusy ? '<span class="tf-spinner"></span>' : icon('sparkles')}</button><button type="submit" class="tf-circle-button" data-action="send-dm" data-conversation-id="${escapeHtml(conversation.id)}" ${viewState.dmBusy ? 'disabled' : ''} aria-label="发送消息">${icon('send')}</button></div></form></section>`;
+        : conversation.type === 'companion' ? renderCompanionAvatar(data, true) : renderAvatar(conversation.name, { large: true, avatarUrl: conversation.avatarUrl, avatarKey: conversation.avatarKey });
+    return `<section class="tf-dm-chat"><header><button class="tf-dm-mobile-back" data-action="back-dm-list" aria-label="返回联系人">${icon('chevron')}</button>${header}</header><div class="tf-dm-messages">${messages.length ? messages.map(message => {
+        const task = message.taskId ? data.world.tasks.find(item => item.id === message.taskId) : null;
+        const card = task ? `<div class="tf-dm-task-card" data-world-item-id="${escapeHtml(task.id)}"><b>${escapeHtml(task.title)}</b><small>${task.status === 'offered' ? '等待回复' : task.status === 'accepted' ? '进行中' : task.status === 'completed' ? '已完成' : task.status === 'failed' ? '已失败' : '已结束'}</small><p>${escapeHtml(task.description)}</p><footer>${task.status === 'offered' ? '<button data-action="set-task-status" data-status="accepted">接受</button><button data-action="set-task-status" data-status="abandoned">婉拒</button>' : ''}${task.status === 'accepted' ? '<button data-action="set-task-status" data-status="completed">完成</button><button data-action="set-task-status" data-status="failed">失败</button>' : ''}</footer></div>` : '';
+        return `<div class="tf-dm-bubble ${message.role === 'user' ? 'is-me' : 'is-them'}"><p>${escapeHtml(message.content)}</p>${card}<time>${formatTime(message.createdAt)}</time></div>`;
+    }).join('') : `<div class="tf-dm-welcome">${welcomeAvatar}<h3>${escapeHtml(conversation.name)}</h3><p>${conversation.type === 'char' ? '这是酒馆当前 Char 的独立私信。' : conversation.type === 'companion' ? '它外出后寄回的消息会留在这里。' : '这段对话使用该角色的人设。'}</p></div>`}</div>${conversation.type === 'companion' ? `<div class="tf-companion-chat-actions"><button class="tf-secondary-button" data-action="open-world-page" data-module-id="travel">看看它的小窝</button><button class="tf-secondary-button" data-action="refresh-world-module" data-module-id="travel">${icon('refresh')}等待新消息</button></div>` : `<form class="tf-dm-composer" data-conversation-id="${escapeHtml(conversation.id)}"><textarea id="tf-dm-input" rows="1" maxlength="3000" placeholder="发消息…" ${viewState.dmBusy ? 'disabled' : ''}></textarea><div class="tf-dm-composer-actions"><button type="button" class="tf-circle-button tf-ai-reply-button" data-action="generate-dm-reply" data-conversation-id="${escapeHtml(conversation.id)}" ${viewState.dmBusy || !messages.length ? 'disabled' : ''} aria-label="生成 AI 回复">${viewState.dmBusy ? '<span class="tf-spinner"></span>' : icon('sparkles')}</button><button type="submit" class="tf-circle-button" data-action="send-dm" data-conversation-id="${escapeHtml(conversation.id)}" ${viewState.dmBusy ? 'disabled' : ''} aria-label="发送消息">${icon('send')}</button></div></form>`}</section>`;
+}
+
+function renderTaskInbox(data) {
+    const tasks = [...data.world.tasks].reverse();
+    return `<section class="tf-task-inbox"><header><div><h2>委托</h2><p>角色发来的任务会像消息一样出现在这里。</p></div></header><div class="tf-task-inbox-list">${tasks.length ? tasks.map(task => `<article class="tf-card" data-world-item-id="${escapeHtml(task.id)}"><div><b>${escapeHtml(task.issuer)}</b><time>${formatTime(task.createdAt)}</time></div><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.description)}</p>${task.reward ? `<span>可能奖励：${escapeHtml(task.reward)}</span>` : ''}<footer>${task.status === 'offered' ? '<button data-action="set-task-status" data-status="accepted">接受</button><button data-action="set-task-status" data-status="abandoned">婉拒</button>' : task.status === 'accepted' ? '<button data-action="set-task-status" data-status="completed">完成</button><button data-action="set-task-status" data-status="failed">失败</button>' : `<em>${task.status === 'completed' ? '已完成' : task.status === 'failed' ? '已失败' : '已结束'}</em>`}</footer></article>`).join('') : '<div class="tf-card tf-empty"><div class="tf-empty-icon">'+icon('book')+'</div><h3>暂时没有委托</h3></div>'}</div></section>`;
 }
 
 function renderMessages(data) {
@@ -612,37 +770,59 @@ function renderMessages(data) {
     const unread = data.notifications.filter(item => !item.read && !npcForId(item.actorNpcId)?.blocked).length;
     const body = viewState.messageMode === 'notifications'
         ? renderNotifications(data)
-        : `<div class="tf-messages-page ${viewState.mobileDmChat ? 'is-chat-open' : ''}">${renderConversationList(data)}${renderDirectChat(data)}</div>`;
-    return `<div class="tf-message-shell"><nav class="tf-message-tabs"><button class="${viewState.messageMode === 'dm' ? 'is-active' : ''}" data-action="message-mode" data-mode="dm">私信</button><button class="${viewState.messageMode === 'notifications' ? 'is-active' : ''}" data-action="message-mode" data-mode="notifications">通知${unread ? `<i>${unread}</i>` : ''}</button></nav>${body}</div>`;
+        : viewState.messageMode === 'tasks'
+            ? renderTaskInbox(data)
+            : `<div class="tf-messages-page ${viewState.mobileDmChat ? 'is-chat-open' : ''}">${renderConversationList(data)}${renderDirectChat(data)}</div>`;
+    return `<div class="tf-message-shell"><nav class="tf-message-tabs"><button class="${viewState.messageMode === 'dm' ? 'is-active' : ''}" data-action="message-mode" data-mode="dm">私信</button>${getSettings().modules.tasks.enabled ? `<button class="${viewState.messageMode === 'tasks' ? 'is-active' : ''}" data-action="message-mode" data-mode="tasks">服务消息</button>` : ''}<button class="${viewState.messageMode === 'notifications' ? 'is-active' : ''}" data-action="message-mode" data-mode="notifications">通知${unread ? `<i>${unread}</i>` : ''}</button></nav>${body}</div>`;
 }
 
 function renderNotifications(data) {
-    const items = [...data.notifications].filter(item => !npcForId(item.actorNpcId)?.blocked).sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
-    return `<section class="tf-notifications"><header><div><h2>通知</h2><p>回复、关注和系统消息都会集中在这里。</p></div><button class="tf-secondary-button" data-action="mark-all-notifications">全部已读</button></header><div class="tf-notification-list">${items.length ? items.map(item => {
+    const filters = [['all', '全部'], ['social', '社交'], ['tasks', '委托'], ['companion', '旅伴'], ['health', '健康'], ['moderation', '管理']];
+    const socialTypes = new Set(['reply', 'mention', 'like', 'follow', 'mutual']);
+    const items = [...data.notifications].filter(item => !npcForId(item.actorNpcId)?.blocked && (viewState.notificationFilter === 'all' || (viewState.notificationFilter === 'social' ? socialTypes.has(item.type) : item.category === viewState.notificationFilter || item.type === viewState.notificationFilter))).sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+    const emptyLabels = { all: ['暂时没有通知', '新的社交和服务提醒会出现在这里。'], social: ['没有新的社交通知', '回复、关注和提及会集中在这里。'], tasks: ['没有委托提醒', '新委托与进度变化会出现在这里。'], companion: ['旅伴还没有来信', '外出后寄回的讯号会出现在这里。'], health: ['没有健康提醒', '身体事件和恢复进度会出现在这里。'], moderation: ['没有管理消息', '举报和裁决进度会出现在这里。'] };
+    const empty = emptyLabels[viewState.notificationFilter] || emptyLabels.all;
+    return `<section class="tf-notifications"><header><div><small>MESSAGE CENTER</small><h2>通知</h2><p>点击消息可直接进入对应帖子、私信或服务。</p></div><button class="tf-secondary-button" data-action="mark-all-notifications">全部已读</button></header><nav class="tf-notification-filters">${filters.map(([id, label]) => `<button class="${viewState.notificationFilter === id ? 'is-active' : ''}" data-action="notification-filter" data-filter="${id}">${label}</button>`).join('')}</nav><div class="tf-notification-list">${items.length ? items.map(item => {
         const npc = npcForId(item.actorNpcId);
-        return `<button class="tf-notification ${item.read ? '' : 'is-unread'}" data-action="open-notification" data-notification-id="${escapeHtml(item.id)}" data-post-id="${escapeHtml(item.postId)}" data-contact-search="${escapeHtml(`${item.actorName} ${item.content}`.toLocaleLowerCase())}">${renderAvatar(item.actorName, { avatarUrl: npc?.avatarUrl, avatarKey: npc?.avatarKey })}<div><b>${escapeHtml(item.actorName)}</b><p>${escapeHtml(item.content)}</p><time>${formatTime(item.createdAt)}</time></div><i></i></button>`;
-    }).join('') : '<div class="tf-card tf-empty"><div class="tf-empty-icon">'+icon('heart')+'</div><h3>暂时没有通知</h3><p>有人回复或关注你时会出现在这里。</p></div>'}</div></section>`;
+        const avatar = item.category === 'companion' || item.type === 'companion' ? renderCompanionAvatar(data) : renderAvatar(item.actorName, { avatarUrl: npc?.avatarUrl, avatarKey: npc?.avatarKey });
+        const moduleLabel = { tasks: '委托', travel: '旅伴', inventory: '背包', health: '健康', moderation: '管理' }[item.moduleId] || '';
+        return `<button class="tf-notification ${item.read ? '' : 'is-unread'}" data-action="open-notification" data-notification-id="${escapeHtml(item.id)}" data-post-id="${escapeHtml(item.postId)}" data-contact-search="${escapeHtml(`${item.actorName} ${item.content}`.toLocaleLowerCase())}">${avatar}<div><span><b>${escapeHtml(item.actorName)}</b>${moduleLabel ? `<em>${moduleLabel}</em>` : ''}</span><p>${escapeHtml(item.content)}</p><time>${formatTime(item.createdAt)}</time></div>${icon('chevron')}<i></i></button>`;
+    }).join('') : `<div class="tf-card tf-empty tf-notification-empty"><div class="tf-empty-icon">${icon('heart')}</div><div><h3>${empty[0]}</h3><p>${empty[1]}</p></div></div>`}</div></section>`;
 }
 
 function renderMeNav() {
     const section = getSettings().ui.meSection || 'overview';
-    const items = [
-        ['overview', 'user', '主页'], ['favorites', 'bookmark', '收藏'], ['npcs', 'users', '角色与头像'],
-        ['memory', 'book', '角色记忆'], ['privacyRelations', 'lock', '隐私与关系'],
-        ['prompts', 'book', '论坛设定'], ['api', 'settings', 'API'], ['sources', 'shield', '内容与注入'],
-        ['boundaries', 'lock', '信息边界'], ['appearance', 'palette', '外观'], ['notifications', 'message', '通知设置'], ['runtime', 'database', '运行后台'], ['data', 'database', '数据'],
+    const groups = [
+        ['世界', [['modules', 'sparkles', '功能与联动'], ['moderation', 'shield', '社区治理'], ['npcs', 'users', '角色与头像']]],
+        ['生成', [['automation', 'settings', '自动化与安全'], ['prompts', 'book', '论坛设定'], ['builtinPrompts', 'settings', '内置提示词'], ['api', 'settings', 'API'], ['sources', 'shield', '正文联动']]],
+        ['隐私', [['boundaries', 'lock', '信息边界'], ['notifications', 'message', '通知设置']]],
+        ['外观', [['appearance', 'palette', '外观与主题']]],
+        ['数据', [['runtime', 'database', '运行后台'], ['data', 'database', '数据管理']]],
     ];
-    return `<nav class="tf-me-nav">${items.map(([id, iconName, label]) => `<button class="${section === id ? 'is-active' : ''}" data-action="me-section" data-section="${id}">${icon(iconName)}<span>${label}</span></button>`).join('')}</nav>`;
+    return `<nav class="tf-me-nav"><header><small>CONTROL CENTER</small><h2>设置中心</h2></header>${groups.map(([label, items]) => `<section class="tf-settings-nav-group"><h3>${label}</h3>${items.map(([id, iconName, itemLabel]) => `<button class="${section === id ? 'is-active' : ''}" data-action="me-section" data-section="${id}">${icon(iconName)}<span>${itemLabel}</span></button>`).join('')}</section>`).join('')}</nav>`;
 }
 
 function renderMeOverview(data) {
     const settings = getSettings();
     const profile = settings.profile;
     const snapshot = getChatSnapshot();
-    const displayName = profile.displayName || snapshot.names.user || '我';
-    const selectedCount = data.posts.filter(post => post.selectedForInjection).length;
+    const displayName = getMyDisplayName();
     const cover = renderStoredImage({ url: profile.backgroundUrl, imageKey: profile.backgroundKey, alt: '个人主页背景' });
-    return `<div class="tf-me-overview"><section class="tf-personal-profile tf-card"><div class="tf-profile-cover">${cover}</div><div class="tf-profile-summary">${renderAvatar(displayName, { large: true, avatarUrl: profile.avatarUrl, avatarKey: profile.avatarKey })}<div><h1>${escapeHtml(displayName)}</h1><p>@${escapeHtml(profile.handle || 'me')} · ${escapeHtml(settings.appearance.forumName)}</p><span>${escapeHtml(profile.bio || '还没有填写个人简介。')}</span></div><div class="tf-profile-stats"><span><b>${data.posts.length}</b>动态</span><span><b>${data.npcs.length}</b>角色</span><span><b>${data.posts.filter(post => post.favorite).length}</b>收藏</span></div></div></section><section class="tf-card tf-settings-card"><header><div><h3>编辑个人主页</h3><p>头像和背景都支持本地图片或图床直链。</p></div></header><div class="tf-form-grid"><label><span>显示名称</span><input data-profile-field="displayName" value="${escapeHtml(profile.displayName)}" placeholder="默认跟随酒馆 User 名称"></label><label><span>账号</span><input data-profile-field="handle" value="${escapeHtml(profile.handle)}"></label><label class="is-wide"><span>个人简介</span><textarea data-profile-field="bio" rows="3">${escapeHtml(profile.bio)}</textarea></label></div><div class="tf-profile-assets"><div><b>个人头像</b><div class="tf-image-source-row"><input data-profile-image-url="avatar" value="${escapeHtml(profile.avatarUrl)}" placeholder="粘贴头像图床直链"><button class="tf-secondary-button" data-action="upload-profile-avatar">导入本地图片</button><button class="tf-danger-text" data-action="clear-profile-avatar">清除</button></div>${renderDefaultAvatarChoices('select-profile-default-avatar')}</div><div><b>主页背景</b><div class="tf-image-source-row"><input data-profile-image-url="background" value="${escapeHtml(profile.backgroundUrl)}" placeholder="粘贴背景图床直链"><button class="tf-secondary-button" data-action="upload-profile-background">导入本地图片</button><button class="tf-danger-text" data-action="clear-profile-background">清除</button></div></div></div></section><div class="tf-dashboard-grid"><button class="tf-card" data-action="me-section" data-section="favorites">${icon('bookmark')}<b>我的收藏</b><span>收藏内容不会自动清理</span></button><button class="tf-card" data-action="me-section" data-section="npcs">${icon('users')}<b>角色管理</b><span>主页、人设、头像、绑定和私信</span></button><button class="tf-card" data-action="me-section" data-section="memory">${icon('book')}<b>角色记忆</b><span>独立编辑每个角色知道和记得的事</span></button><button class="tf-card" data-action="me-section" data-section="privacyRelations">${icon('lock')}<b>隐私与关系</b><span>集中管理静音与拉黑角色</span></button><button class="tf-card" data-action="me-section" data-section="appearance">${icon('palette')}<b>外观设置</b><span>名称、字体、颜色和 CSS</span></button><button class="tf-card" data-action="me-section" data-section="runtime">${icon('database')}<b>运行后台</b><span>生成记录、推理内容和报错</span></button><button class="tf-card" data-action="me-section" data-section="sources">${icon('shield')}<b>注入状态</b><span>${settings.injection.enabled ? `已开启 · ${selectedCount} 篇待注入` : '当前已关闭'}</span></button></div></div>`;
+    const ownPosts = data.posts.filter(post => isMyHandle(post.handle) && !post.moderation?.hidden);
+    const ownReplies = data.posts.flatMap(post => (post.comments || []).filter(comment => isMyHandle(comment.handle)).map(comment => ({ post, comment })));
+    const media = ownPosts.filter(post => post.imageUrl || post.imageKey || post.imagePrompt);
+    const activeTab = ['posts', 'replies', 'media', 'following', 'followers'].includes(viewState.profileTab) ? viewState.profileTab : 'posts';
+    const relationRoles = activeTab === 'following' ? data.npcs.filter(npc => npc.followedByUser) : data.npcs.filter(npc => npc.followsUser);
+    const content = activeTab === 'posts' ? (ownPosts.length ? [...ownPosts].reverse().map(renderPost).join('') : '<div class="tf-card tf-empty"><h3>还没有发布动态</h3></div>')
+        : activeTab === 'replies' ? (ownReplies.length ? ownReplies.reverse().map(({ post, comment }) => `<button class="tf-card tf-profile-reply" data-action="open-post" data-post-id="${escapeHtml(post.id)}"><b>回复了 @${escapeHtml(post.handle)}</b><p>${escapeHtml(comment.content)}</p><small>${formatTime(comment.createdAt)}</small></button>`).join('') : '<div class="tf-card tf-empty"><h3>还没有公开回复</h3></div>')
+            : activeTab === 'media' ? (media.length ? media.reverse().map(post => `<button class="tf-profile-media" data-action="open-post" data-post-id="${escapeHtml(post.id)}">${renderPostImage(post)}</button>`).join('') : '<div class="tf-card tf-empty"><h3>还没有媒体内容</h3></div>')
+                : (relationRoles.length ? relationRoles.map(npc => `<button class="tf-card tf-profile-reply" data-action="open-npc" data-npc-id="${escapeHtml(npc.id)}">${renderAvatar(npc.name, { avatarUrl: npc.avatarUrl, avatarKey: npc.avatarKey })}<b>${escapeHtml(npc.name)}</b><small>@${escapeHtml(npc.handle)}</small>${icon('chevron')}</button>`).join('') : `<div class="tf-card tf-empty"><h3>${activeTab === 'following' ? '还没有关注角色' : '还没有角色关注你'}</h3></div>`);
+    return `<div class="tf-me-overview tf-owner-profile"><section class="tf-personal-profile tf-card"><div class="tf-profile-cover">${cover}</div><div class="tf-profile-summary">${renderAvatar(displayName, { large: true, avatarUrl: profile.avatarUrl, avatarKey: profile.avatarKey })}<div class="tf-profile-identity"><h1>${escapeHtml(displayName)}</h1><p>@${escapeHtml(profile.handle || 'me')}</p><span>${escapeHtml(profile.bio || '还没有填写个人简介。')}</span></div><div class="tf-profile-stats"><button data-action="profile-tab" data-profile-tab="posts"><b>${ownPosts.length}</b>动态</button><button data-action="profile-tab" data-profile-tab="following"><b>${data.npcs.filter(npc => npc.followedByUser).length}</b>关注</button><button data-action="profile-tab" data-profile-tab="followers"><b>${data.npcs.filter(npc => npc.followsUser).length}</b>关注者</button></div><div class="tf-owner-actions"><button class="tf-secondary-button" data-action="me-section" data-section="profileEdit">编辑资料</button><button class="tf-secondary-button" data-action="me-section" data-section="favorites">${icon('bookmark')}收藏</button><button class="tf-secondary-button" data-action="me-section" data-section="memory">${icon('book')}角色记忆</button><button class="tf-secondary-button" data-action="me-section" data-section="privacyRelations">${icon('lock')}关系</button>${settings.modules.inventory.enabled ? `<button class="tf-secondary-button" data-action="me-section" data-section="backpack">${icon('database')}背包</button>` : ''}</div></div><nav class="tf-profile-tabs"><button class="${activeTab === 'posts' ? 'is-active' : ''}" data-action="profile-tab" data-profile-tab="posts">动态</button><button class="${activeTab === 'replies' ? 'is-active' : ''}" data-action="profile-tab" data-profile-tab="replies">回复</button><button class="${activeTab === 'media' ? 'is-active' : ''}" data-action="profile-tab" data-profile-tab="media">媒体</button></nav></section><div class="${activeTab === 'media' ? 'tf-profile-media-grid' : 'tf-feed-list tf-feed-compact tf-profile-content-list'}">${content}</div></div>`;
+}
+
+function renderProfileEditor() {
+    const profile = getSettings().profile;
+    return `<section class="tf-section-page"><header><div><h2>编辑个人资料</h2><p>这些内容会显示在你的公开主页；收藏和背包仍是私密的。</p></div><button class="tf-secondary-button" data-action="me-section" data-section="overview">返回主页</button></header><section class="tf-card tf-settings-card"><div class="tf-form-grid"><label><span>显示名称</span><input data-profile-field="displayName" value="${escapeHtml(profile.displayName)}" placeholder="默认跟随酒馆 User 名称"></label><label><span>账号</span><input data-profile-field="handle" value="${escapeHtml(profile.handle)}"></label><label class="is-wide"><span>个人简介</span><textarea data-profile-field="bio" rows="4">${escapeHtml(profile.bio)}</textarea></label></div><div class="tf-profile-assets"><div><b>个人头像</b><div class="tf-image-source-row"><input data-profile-image-url="avatar" value="${escapeHtml(profile.avatarUrl)}" placeholder="粘贴头像图床直链"><button class="tf-secondary-button" data-action="upload-profile-avatar">导入本地图片</button><button class="tf-danger-text" data-action="clear-profile-avatar">清除</button></div>${renderDefaultAvatarChoices('select-profile-default-avatar')}</div><div><b>主页背景</b><div class="tf-image-source-row"><input data-profile-image-url="background" value="${escapeHtml(profile.backgroundUrl)}" placeholder="粘贴背景图床直链"><button class="tf-secondary-button" data-action="upload-profile-background">导入本地图片</button><button class="tf-danger-text" data-action="clear-profile-background">清除</button></div></div></div></section></section>`;
 }
 
 function renderDefaultAvatarChoices(action, npcId = '') {
@@ -650,7 +830,7 @@ function renderDefaultAvatarChoices(action, npcId = '') {
 }
 
 function renderFavorites(data) {
-    const favorites = data.posts.filter(post => post.favorite);
+    const favorites = data.posts.filter(post => post.favorite && !post.moderation?.hidden);
     return `<section class="tf-section-page"><header><div><h2>收藏</h2><p>收藏帖不会被自动清理。</p></div></header><div class="tf-feed-list tf-feed-compact">${favorites.length ? [...favorites].reverse().map(renderPost).join('') : '<div class="tf-card tf-empty"><div class="tf-empty-icon">'+icon('bookmark')+'</div><h3>还没有收藏</h3></div>'}</div></section>`;
 }
 
@@ -678,11 +858,12 @@ function renderRoleMemoryPage(data) {
 }
 
 function renderPrivacyRelations(data) {
+    const settings = getSettings();
     const roles = getRoleLibrary(data);
     const muted = roles.filter(npc => npc.muted);
     const blocked = roles.filter(npc => npc.blocked);
     const rows = (items, action, empty) => items.length ? items.map(npc => `<article class="tf-relation-row" data-npc-id="${escapeHtml(npc.id)}">${renderAvatar(npc.name, { avatarUrl: npc.avatarUrl, avatarKey: npc.avatarKey })}<div><b>${escapeHtml(npc.name)}</b><small>@${escapeHtml(npc.handle)}</small></div><button class="tf-secondary-button" data-action="${action}" data-npc-id="${escapeHtml(npc.id)}">解除</button></article>`).join('') : `<p class="tf-empty-mini">${empty}</p>`;
-    return `<section class="tf-section-page tf-privacy-relations"><header><div><h2>隐私与关系</h2><p>集中查看和解除静音、拉黑，不必再进入角色资料深处寻找。</p></div></header><section class="tf-card tf-settings-card"><header><div><h3>已静音角色</h3><p>不会出现在关注与推荐流，仍可查看主页和私信。</p></div></header><div class="tf-relation-list">${rows(muted, 'toggle-role-muted', '没有静音任何角色')}</div></section><section class="tf-card tf-settings-card"><header><div><h3>已拉黑角色</h3><p>隐藏其帖子、评论和通知，禁止私信并取消双方关注；解除后不会自动恢复关注。</p></div></header><div class="tf-relation-list">${rows(blocked, 'toggle-role-blocked', '没有拉黑任何角色')}</div></section></section>`;
+    return `<section class="tf-section-page tf-privacy-relations"><header><div><h2>隐私与关系</h2><p>私信门槛、角色之间私信、静音和拉黑集中在这里。</p></div></header><section class="tf-card tf-settings-card"><header><div><h3>私信门槛</h3><p>角色主动关注你以后一定可以私信；陌生角色是否可以私信由下面决定。</p></div></header><div class="tf-form-grid"><label><span>陌生角色私信</span><select data-setting="social.directMessagePolicy"><option value="open" ${settings.social.directMessagePolicy === 'open' ? 'selected' : ''}>全部允许</option><option value="following" ${settings.social.directMessagePolicy === 'following' ? 'selected' : ''}>只有已关注我的角色</option><option value="chance" ${settings.social.directMessagePolicy === 'chance' ? 'selected' : ''}>按概率拒绝</option></select></label><label><span>陌生人拒绝概率</span><input type="number" min="0" max="100" data-setting="social.strangerBlockChance" value="${Number(settings.social.strangerBlockChance)}" ${settings.social.directMessagePolicy === 'chance' ? '' : 'disabled'}></label><div>${renderSwitch({ checked: settings.social.requireRoleFollowBeforeDm, action: 'toggle-role-follow-before-dm', label: 'AI 主动发私信前必须先关注' })}</div><div>${renderSwitch({ checked: settings.social.roleDirectMessages, action: 'toggle-role-direct-messages', label: '允许角色之间私信' })}</div></div></section><section class="tf-card tf-settings-card"><header><div><h3>已静音角色</h3><p>不会出现在关注与推荐流，仍可查看主页和私信。</p></div></header><div class="tf-relation-list">${rows(muted, 'toggle-role-muted', '没有静音任何角色')}</div></section><section class="tf-card tf-settings-card"><header><div><h3>已拉黑角色</h3><p>隐藏其帖子、评论和通知，禁止私信并取消双方关注；解除后不会自动恢复关注。</p></div></header><div class="tf-relation-list">${rows(blocked, 'toggle-role-blocked', '没有拉黑任何角色')}</div></section></section>`;
 }
 
 function renderNpcProfileLegacy(data, npc) {
@@ -700,10 +881,11 @@ function renderNpcProfileLegacy(data, npc) {
 }
 
 function renderNpcProfile(data, npc) {
+    const settings = getSettings();
     const page = renderNpcProfileLegacy(data, npc).replace(renderNpcMemory(npc), '');
     const avatarChoices = renderDefaultAvatarChoices('select-npc-default-avatar', npc.id);
     const backgroundPreview = renderStoredImage({ url: npc.backgroundUrl, imageKey: npc.backgroundKey, alt: `${npc.name} 的主页背景` });
-    const backgroundEditor = `<section class="tf-npc-background-editor"><div class="tf-npc-background-preview">${backgroundPreview || '<span>尚未设置主页背景</span>'}</div><div><b>公开主页背景</b><p>显示在角色公开主页顶部，支持本地图片或图床直链。</p><div class="tf-image-source-row"><input data-npc-background-url value="${escapeHtml(npc.backgroundKey ? '' : npc.backgroundUrl)}" placeholder="粘贴背景图床直链"><button class="tf-secondary-button" data-action="upload-npc-background" data-npc-id="${escapeHtml(npc.id)}">导入本地图片</button><button class="tf-danger-text" data-action="clear-npc-background" data-npc-id="${escapeHtml(npc.id)}">清除</button></div></div></section>`;
+    const backgroundEditor = `<section class="tf-npc-background-editor"><div class="tf-npc-background-preview">${backgroundPreview || '<span>尚未设置主页背景</span>'}</div><div><b>公开主页背景</b><p>显示在角色公开主页顶部，支持本地图片或图床直链。</p><div class="tf-image-source-row"><input data-npc-background-url value="${escapeHtml(npc.backgroundKey ? '' : npc.backgroundUrl)}" placeholder="粘贴背景图床直链"><button class="tf-secondary-button" data-action="upload-npc-background" data-npc-id="${escapeHtml(npc.id)}">导入本地图片</button><button class="tf-danger-text" data-action="clear-npc-background" data-npc-id="${escapeHtml(npc.id)}">清除</button></div><label class="tf-role-permission-select"><span>社区身份与权限</span><select data-npc-permission-role>${settings.moderation.permissionLevels.map(level => `<option value="${escapeHtml(level.id)}" ${npc.permissionRole === level.id ? 'selected' : ''}>${escapeHtml(level.name)} · 等级 ${Number(level.level)}</option>`).join('')}</select><small>权限能力在“社区治理”中统一配置。</small></label></div></section>`;
     return page.replace(avatarChoices, `${backgroundEditor}${avatarChoices}`);
 }
 
@@ -713,7 +895,7 @@ function renderNpcs(data) {
 }
 
 function renderPublicNpcProfileLegacy(data, npc) {
-    const posts = data.posts.filter(post => post.npcId === npc.id || String(post.handle || '').toLocaleLowerCase() === String(npc.handle || '').toLocaleLowerCase());
+    const posts = data.posts.filter(post => !post.moderation?.hidden && (post.npcId === npc.id || String(post.handle || '').toLocaleLowerCase() === String(npc.handle || '').toLocaleLowerCase()));
     const followingHandles = new Set((npc.followingHandles || []).map(handle => String(handle).replace(/^@/, '').toLocaleLowerCase()));
     const followingRoles = data.npcs.filter(role => role.id !== npc.id && followingHandles.has(String(role.handle || '').toLocaleLowerCase()));
     const followers = data.npcs.filter(role => (role.followingHandles || []).some(handle => String(handle).replace(/^@/, '').toLocaleLowerCase() === String(npc.handle || '').toLocaleLowerCase()));
@@ -724,7 +906,12 @@ function renderPublicNpcProfileLegacy(data, npc) {
 
 function renderPublicNpcProfile(data, npc) {
     const visibleData = npc.blocked ? { ...data, posts: data.posts.filter(post => post.npcId !== npc.id) } : data;
-    const page = renderPublicNpcProfileLegacy(visibleData, npc);
+    let page = renderPublicNpcProfileLegacy(visibleData, npc);
+    const health = getSettings().modules.health.enabled ? data.world.health.filter(item => item.status !== 'resolved' && (item.subjectNpcId === npc.id || item.subject === npc.name)) : [];
+    if (health.length) {
+        const healthMarkup = `<section class="tf-profile-health tf-card"><header><h3>近况</h3></header>${health.map(item => `<div><b>${escapeHtml(item.name)}</b><span>${escapeHtml(item.status === 'recovering' ? '恢复中' : '当前状态')}</span><p>${escapeHtml(item.symptoms)}</p></div>`).join('')}</section>`;
+        page = page.replace('<section class="tf-profile-social-list', `${healthMarkup}<section class="tf-profile-social-list`);
+    }
     const menu = `<details class="tf-profile-menu"><summary class="tf-icon-button" aria-label="关系操作">${icon('more')}</summary><div><button data-action="toggle-role-muted" data-npc-id="${escapeHtml(npc.id)}">${icon('message')}<span>${npc.muted ? '取消静音' : '静音该角色'}</span></button><button class="${npc.blocked ? '' : 'is-danger'}" data-action="toggle-role-blocked" data-npc-id="${escapeHtml(npc.id)}">${icon('lock')}<span>${npc.blocked ? '解除拉黑' : '拉黑该角色'}</span></button>${npc.followedByUser ? `<button data-action="toggle-follow-role" data-npc-id="${escapeHtml(npc.id)}">${icon('user')}<span>取消关注</span></button>` : ''}</div></details>`;
     return page.replace('</div><div class="tf-public-profile-copy">', `${menu}</div><div class="tf-public-profile-copy">`);
 }
@@ -734,6 +921,396 @@ function renderPrompts() {
     const roleOptions = role => [['system', '系统'], ['user', '用户'], ['assistant', '助手']]
         .map(([value, label]) => `<option value="${value}" ${role === value ? 'selected' : ''}>${label}</option>`).join('');
     return `<section class="tf-section-page"><header><div><h2>论坛设定</h2><p>像酒馆预设一样排列消息，并为每条设定选择 system、user 或 assistant。</p></div><div><button class="tf-secondary-button" data-action="import-prompts">导入</button><button class="tf-secondary-button" data-action="export-prompts">导出</button><button class="tf-primary-button" data-action="add-prompt-entry">${icon('plus')}新增</button></div></header><div class="tf-prompt-list">${entries.map(entry => `<article class="tf-card tf-prompt-entry" data-entry-id="${escapeHtml(entry.id)}"><header><input data-entry-field="title" value="${escapeHtml(entry.title)}"><label class="tf-prompt-role"><span>role</span><select data-entry-field="role">${roleOptions(entry.role)}</select></label>${renderSwitch({ checked: entry.enabled, action: 'toggle-prompt-entry', label: '启用' })}<button class="tf-icon-button" data-action="delete-prompt-entry" data-entry-id="${escapeHtml(entry.id)}">${icon('trash')}</button></header><textarea data-entry-field="content" rows="7">${escapeHtml(entry.content)}</textarea><footer><label>触发词<input data-entry-field="keywords" value="${escapeHtml((entry.keywords || []).join(', '))}" placeholder="逗号分隔"></label><label>优先级<input type="number" data-entry-field="order" value="${Number(entry.order || 0)}"></label>${renderSwitch({ checked: entry.constant, action: 'toggle-prompt-constant', label: '常驻' })}</footer></article>`).join('')}</div></section>`;
+}
+
+function renderBuiltinPrompts() {
+    const settings = getSettings();
+    const labels = {
+        forumSystem: ['论坛生成 · 系统规则', '控制整个论坛生成任务的最高层规则。'],
+        forumGeneration: ['论坛生成 · 内容要求', '控制帖子、评论、图片、转发等写法。'],
+        mainChatInjection: ['注入正文 · 论坛模板', '使用 {{content}} 代表选择注入的帖子。'],
+        roleInjection: ['注入正文 · 角色模板', '使用 {{content}} 代表允许注入的角色资料。'],
+        threadReply: ['评论区 · AI 跟帖', '用户点击生成回复时使用。'],
+        npcProfile: ['角色 · 生成人设', '点击角色主页中的生成人设按钮时使用。'],
+        directMessage: ['私信 · 用户与角色', '只影响私信中的 AI 回复。'],
+        proactiveDirectMessage: ['私信 · 角色主动联系', '随论坛联动生成的主动私信规则，不会单独调用第二次 API。'],
+        roleDirectMessage: ['私信 · 角色之间', '确保 A 与 B 的秘密不会泄露给 C。'],
+        moderation: ['社区治理', 'AI 管理员处理举报时使用。'],
+        task: ['任务', '生成普通委托、神秘任务、骗局与失败后果。'],
+        fortune: ['运势', '生成当天的概率倾向与剧情影响。'],
+        travel: ['外出', '生成符合世界观的旅行、探索和见闻。'],
+        inventory: ['背包', '生成可持有、消耗或影响剧情的物品。'],
+        health: ['健康', '生成虚构角色的身体事件与恢复状态。'],
+        orchestrator: ['世界调度器', '一次 API 联动多个模块时使用。'],
+        narrativeSafety: ['剧情禁区执行', '把禁止事件的概率设为零，并要求同一次输出改成可逆替代。'],
+    };
+    return `<section class="tf-section-page tf-builtin-prompts"><header><div><h2>内置提示词</h2><p>这些是插件真正使用的底层指令，与“论坛设定”分开保存；可以修改，也可以逐条恢复默认。</p></div><button class="tf-secondary-button" data-action="restore-all-builtin-prompts">全部恢复默认</button></header><div class="tf-builtin-prompt-list">${Object.entries(labels).map(([id, [title, description]]) => `<article class="tf-card tf-settings-card" data-builtin-prompt-id="${escapeHtml(id)}"><header><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p></div><button class="tf-text-button" data-action="restore-builtin-prompt" data-prompt-id="${escapeHtml(id)}">恢复默认</button></header><textarea rows="7" data-builtin-prompt="${escapeHtml(id)}">${escapeHtml(settings.builtinPrompts[id] || '')}</textarea></article>`).join('')}</div></section>`;
+}
+
+function renderModuleApiOptions(selectedId) {
+    const settings = getSettings();
+    return `<option value="inherit" ${selectedId === 'inherit' ? 'selected' : ''}>跟随当前 API 配置</option>${settings.apiProfiles.map(profile => `<option value="${escapeHtml(profile.id)}" ${selectedId === profile.id ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}`;
+}
+
+function renderModuleCard(definition) {
+    const settings = getSettings();
+    const module = settings.modules[definition.id];
+    const injectIntoChat = definition.id === 'forum' ? settings.injection.enabled : module.injectIntoChat;
+    const tokens = Number(viewState.injectionTokens.modules?.[definition.id] || 0);
+    const busy = viewState.moduleBusy.has(definition.id);
+    const automationLabels = [['suggest', '只记录建议'], ['confirm', '由我确认'], ['auto', '允许自动执行']];
+    const contextLabels = { moderation: '查看管理通知', tasks: '打开委托', fortune: '查看今日运势', travel: '打开旅伴小窝', inventory: '打开我的背包', health: '打开健康与医疗' };
+    const independent = module.generationMode === 'independent';
+    const runtime = getForumData().world.moduleRuntime?.[definition.id];
+    const runtimeText = runtime?.lastDecision || (!module.enabled ? '模块已关闭' : module.generationMode === 'independent' ? '独立模式，等待手动刷新或自动触发' : module.generationMode === 'local' ? '本地模式，等待日期或手动刷新' : '将在下次论坛刷新时参与联动');
+    const modeControl = definition.id === 'forum' ? '<span class="tf-mode-note">论坛随“刷新”生成</span>' : `<label class="tf-module-mode"><span>生成方式</span><select data-module-field="generationMode"><option value="linked" ${module.generationMode === 'linked' ? 'selected' : ''}>持续联动 · 每次论坛刷新一起生成</option><option value="independent" ${independent ? 'selected' : ''}>独立生成 · 使用本模块 API</option>${definition.id === 'fortune' ? `<option value="local" ${module.generationMode === 'local' ? 'selected' : ''}>本地随机 · 不调用 API</option>` : ''}</select><small>${module.generationMode === 'linked' ? '不关闭就会一直参与联动；与论坛共用一次 API 请求。' : module.generationMode === 'local' ? '按世界内日期缓存，同一天不会重复调用 API。' : '手动或自动单独生成；只有此模式使用下面的 API 和 RPM。'}</small></label>`;
+    const flowControl = definition.id === 'forum'
+        ? `<div class="tf-module-flow tf-direction-summary"><span><b>主聊天读取论坛内容</b><small>${settings.injection.enabled ? '已开启；仅使用单独选中的帖子' : '当前关闭，不会向正文提供帖子'}</small></span><button class="tf-secondary-button" data-action="go-injection-settings">前往“注入主聊天”</button></div>`
+        : `<div class="tf-module-flow"><div>${renderSwitch({ checked: injectIntoChat, action: 'toggle-module-injection', label: '允许该模块状态进入正文', disabled: !module.enabled, dataset: { moduleId: definition.id } })}<small data-module-token="${escapeHtml(definition.id)}">${tokens ? `当前约 ${numberLabel(tokens)} Tokens` : '当前没有注入内容'}</small></div></div>`;
+    const fortuneApiToggle = definition.id === 'fortune' ? `<div class="tf-module-feature-toggle">${renderSwitch({ checked: module.allowApiDraw, action: 'toggle-fortune-api-draw', label: '允许 AI 生成抽签结果' })}<small>默认关闭。开启后只有主动点击“AI 抽签”才会调用一次文本 API。</small></div>` : '';
+    const showApiControls = independent || (definition.id === 'fortune' && module.allowApiDraw);
+    const apiControls = `${fortuneApiToggle}${showApiControls ? `<label><span>${independent ? '独立 API' : '抽签 API'}</span><select data-module-field="apiProfileId">${renderModuleApiOptions(module.apiProfileId)}</select></label><label><span>${independent ? '独立' : '抽签'} RPM 上限</span><input type="number" min="0" max="600" data-module-field="rpm" value="${Number(module.rpm || 0)}" placeholder="0=不限"></label>` : ''}`;
+    const probability = definition.id === 'forum' ? '' : `<label><span>自动触发概率（%）</span><input type="number" min="0" max="100" data-module-field="probability" value="${Number(module.probability ?? 35)}"></label><label><span>自动冷却（分钟）</span><input type="number" min="0" max="43200" data-module-field="cooldownMinutes" value="${Number(module.cooldownMinutes || 0)}"></label>`;
+    const pageButton = definition.id === 'forum'
+        ? '<button class="tf-secondary-button" data-action="switch-tab" data-tab="home">打开论坛</button>'
+        : `<button class="tf-secondary-button" data-action="open-module-context" data-module-id="${escapeHtml(definition.id)}" ${!module.enabled ? 'disabled' : ''}>${escapeHtml(contextLabels[definition.id] || '查看内容')}</button>${module.generationMode === 'independent' || module.generationMode === 'local' ? `<button class="tf-secondary-button" data-action="refresh-world-module" data-module-id="${escapeHtml(definition.id)}" ${!module.enabled || busy ? 'disabled' : ''}>${busy ? '<span class="tf-spinner"></span>生成中' : `${icon('refresh')}刷新`}</button>` : ''}`;
+    const tools = viewState.openModuleToolsId === definition.id ? `<div class="tf-module-tools-menu"><button data-action="export-module" data-module-id="${escapeHtml(definition.id)}">导出此模块设置</button><button data-action="import-module" data-module-id="${escapeHtml(definition.id)}">导入此模块设置</button><button data-action="reset-module" data-module-id="${escapeHtml(definition.id)}">恢复此模块默认设置</button></div>` : '';
+    return `<article class="tf-module-card tf-card ${module.enabled ? 'is-enabled' : ''}" data-module-id="${escapeHtml(definition.id)}"><header><span class="tf-module-icon">${icon(definition.icon)}</span><div><h3>${escapeHtml(definition.name)}</h3><p>${escapeHtml(definition.description)}</p></div><div class="tf-module-tools-wrap"><button class="tf-icon-button" data-action="module-tools" data-module-id="${escapeHtml(definition.id)}" aria-label="模块数据工具">${icon('more')}</button>${tools}</div>${renderSwitch({ checked: module.enabled, action: 'toggle-world-module', label: '', dataset: { moduleId: definition.id } })}</header>${modeControl}${flowControl}<div class="tf-module-options">${apiControls}${probability}<label><span>自动化权限</span><select data-module-field="automation">${automationLabels.map(([value, label]) => `<option value="${value}" ${module.automation === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label></div>${definition.id === 'forum' ? '' : `<div class="tf-module-diagnostics"><span>为什么没有生成：${escapeHtml(runtimeText)}</span></div>`}<footer>${pageButton}</footer></article>`;
+}
+
+function renderWorldStateDashboard(data) {
+    const settings = getSettings();
+    const world = data.world;
+    const taskStatus = { offered: '待接受', accepted: '进行中', completed: '已完成', failed: '失败', abandoned: '已放弃' };
+    const tasks = settings.modules.tasks.enabled ? `<section class="tf-card tf-world-board"><header><div><h3>任务</h3><p>任务可以来自普通人、官号、神秘人，也可能是骗局。</p></div><span>${world.tasks.filter(item => ['offered', 'accepted'].includes(item.status)).length} 个进行中</span></header><div>${world.tasks.length ? [...world.tasks].reverse().slice(0, 20).map(task => `<article data-world-item-id="${escapeHtml(task.id)}"><div><b>${escapeHtml(task.title)}${task.scam ? '<em>可疑</em>' : ''}</b><small>${escapeHtml(task.issuer)} · ${taskStatus[task.status] || task.status}</small><p>${escapeHtml(task.description)}</p>${task.reward ? `<span>奖励：${escapeHtml(task.reward)}</span>` : ''}${task.failure ? `<span>失败：${escapeHtml(task.failure)}</span>` : ''}</div><footer>${task.status === 'offered' ? `<button data-action="set-task-status" data-status="accepted">接受</button>` : ''}${task.status === 'accepted' ? `<button data-action="set-task-status" data-status="completed">完成</button><button data-action="set-task-status" data-status="failed">失败</button>` : ''}<button class="tf-danger-text" data-action="delete-world-item" data-kind="tasks">删除</button></footer></article>`).join('') : '<p class="tf-empty-mini">还没有任务</p>'}</div></section>` : '';
+    const fortune = settings.modules.fortune.enabled ? `<section class="tf-card tf-world-board tf-fortune-board"><header><div><h3>今日运势</h3><p>只影响倾向和概率，不会强制改写剧情。</p></div></header>${world.fortune ? `<div class="tf-fortune-score"><b>${escapeHtml(world.fortune.label)}</b><strong>${Number(world.fortune.score)}</strong><p>${escapeHtml(world.fortune.summary)}</p><ul>${world.fortune.effects.map(effect => `<li>${escapeHtml(effect)}</li>`).join('')}</ul></div>` : '<p class="tf-empty-mini">今天的运势还没有生成</p>'}</section>` : '';
+    const trips = settings.modules.travel.enabled ? `<section class="tf-card tf-world-board"><header><div><h3>外出与见闻</h3><p>会自动适配当前世界观，不固定为现代旅行。</p></div></header><div>${world.trips.length ? [...world.trips].reverse().slice(0, 16).map(trip => `<article data-world-item-id="${escapeHtml(trip.id)}"><div><b>${escapeHtml(trip.traveler)} → ${escapeHtml(trip.destination)}</b><small>${escapeHtml(trip.status)}</small><p>${escapeHtml(trip.notes)}</p>${trip.souvenir ? `<span>带回：${escapeHtml(trip.souvenir)}</span>` : ''}</div><footer><button data-action="advance-trip-status">推进状态</button><button class="tf-danger-text" data-action="delete-world-item" data-kind="trips">删除</button></footer></article>`).join('') : '<p class="tf-empty-mini">还没有外出记录</p>'}</div></section>` : '';
+    const inventory = settings.modules.inventory.enabled ? `<section class="tf-card tf-world-board"><header><div><h3>背包</h3><p>只有符合当前世界观的物品会进入这里。</p></div></header><div>${world.inventory.length ? [...world.inventory].reverse().slice(0, 30).map(item => `<article class="${item.consumed ? 'is-finished' : ''}" data-world-item-id="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.name)} ×${Number(item.quantity)}</b><small>${escapeHtml(item.source || '来源不明')}</small><p>${escapeHtml(item.description)}</p>${item.effect ? `<span>${escapeHtml(item.effect)}</span>` : ''}</div><footer>${item.usable && !item.consumed ? '<button data-action="use-inventory-item">使用</button>' : ''}<button class="tf-danger-text" data-action="delete-world-item" data-kind="inventory">删除</button></footer></article>`).join('') : '<p class="tf-empty-mini">背包还是空的</p>'}</div></section>` : '';
+    const health = settings.modules.health.enabled ? `<section class="tf-card tf-world-board"><header><div><h3>健康</h3><p>只描述虚构角色状态，不提供现实医疗诊断。</p></div></header><div>${world.health.length ? [...world.health].reverse().slice(0, 20).map(item => `<article class="${item.status === 'resolved' ? 'is-finished' : ''}" data-world-item-id="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.subject)} · ${escapeHtml(item.name)}</b><small>${escapeHtml(item.severity)} · ${escapeHtml(item.status)}</small><p>${escapeHtml(item.symptoms)}</p>${item.storyEffect ? `<span>${escapeHtml(item.storyEffect)}</span>` : ''}</div><footer>${item.status !== 'resolved' ? '<button data-action="advance-health-status">推进恢复</button>' : ''}<button class="tf-danger-text" data-action="delete-world-item" data-kind="health">删除</button></footer></article>`).join('') : '<p class="tf-empty-mini">没有正在记录的身体事件</p>'}</div></section>` : '';
+    return `<div class="tf-world-dashboard">${fortune}${tasks}${trips}${inventory}${health}</div>`;
+}
+
+function renderTaskApp(data) {
+    const labels = { offered: '待接受', accepted: '进行中', completed: '已完成', failed: '失败', abandoned: '已放弃' };
+    const tasks = [...data.world.tasks].reverse();
+    return `<section class="tf-card tf-world-board tf-world-board-page"><header><div><h3>委托与任务</h3><p>普通委托、神秘人的邀请和可疑交易都会留在这里。</p></div><span>${tasks.filter(item => ['offered', 'accepted'].includes(item.status)).length} 个待处理</span></header><div>${tasks.length ? tasks.map(task => `<article data-world-item-id="${escapeHtml(task.id)}"><div><b>${escapeHtml(task.title)}${task.scam ? '<em>可疑</em>' : ''}</b><small>${escapeHtml(task.issuer)} · ${labels[task.status] || task.status}</small><p>${escapeHtml(task.description)}</p>${task.reward ? `<span>可能奖励：${escapeHtml(task.reward)}</span>` : ''}${task.failure ? `<span>失败影响：${escapeHtml(task.failure)}</span>` : ''}</div><footer>${task.status === 'offered' ? '<button data-action="set-task-status" data-status="accepted">接受</button>' : ''}${task.status === 'accepted' ? '<button data-action="set-task-status" data-status="completed">完成</button><button data-action="set-task-status" data-status="failed">失败</button>' : ''}<button class="tf-danger-text" data-action="delete-world-item" data-kind="tasks">删除</button></footer></article>`).join('') : '<p class="tf-empty-mini">任务栏还是空的</p>'}</div></section>`;
+}
+
+function renderFortuneApp(data) {
+    const fortune = data.world.fortune;
+    return `<section class="tf-card tf-world-board-page tf-fortune-app">${fortune ? `<div class="tf-fortune-orb"><small>${escapeHtml(fortune.date)}</small><strong>${Number(fortune.score)}</strong><b>${escapeHtml(fortune.label)}</b></div><div class="tf-fortune-copy"><h3>${escapeHtml(fortune.summary || '今天会平稳地过去。')}</h3><ul>${fortune.effects.map(effect => `<li>${escapeHtml(effect)}</li>`).join('')}</ul></div>` : '<div class="tf-empty"><div class="tf-empty-icon">'+icon('sparkles')+'</div><h3>今天还没有抽取运势</h3></div>'}</section>`;
+}
+
+function renderFortuneAppV2(data) {
+    const fortune = data.world.fortune;
+    if (!fortune) {
+        const cards = [['left', '晨雾', '从安静的一侧开始'], ['middle', '流光', '跟随今天最先出现的念头'], ['right', '晚风', '给偶然留一个位置']];
+        const apiDraw = getSettings().modules.fortune.allowApiDraw
+            ? `<aside class="tf-fortune-api-draw"><div><small>OPTIONAL · ONE API CALL</small><b>让 AI 按当前世界观解签</b><p>仅在你点击时调用一次设置中的抽签 API；不会自动触发。</p></div><button class="tf-secondary-button" data-action="draw-api-fortune" ${viewState.moduleBusy.has('fortune') ? 'disabled' : ''}>${viewState.moduleBusy.has('fortune') ? '<span class="tf-spinner"></span>解签中' : `${icon('sparkles')}AI 抽签`}</button></aside>`
+            : '';
+        return `<section class="tf-card tf-fortune-draw"><header><small>DAILY LOCAL DRAW</small><h2>选一张今日签</h2><p>本地翻牌不调用 API；如需 AI 解签，可在“设置中心 → 世界 → 运势”中单独开启。</p></header><div class="tf-fortune-card-row">${cards.map(([id, title, hint], index) => `<button data-action="draw-local-fortune" data-choice="${id}" style="--card-index:${index}"><span>${['☾', '✦', '◇'][index]}</span><b>${title}</b><small>${hint}</small></button>`).join('')}</div>${apiDraw}<footer>${icon('lock')}同一天只保留一次正式结果，可随时手动撤销</footer></section>`;
+    }
+    const aspectLabels = { encounter: '相遇', travel: '旅途', discovery: '发现' };
+    const modifierLabels = { travelDeparture: '出发倾向', travelMessage: '来信概率', souvenir: '纪念品', detour: '意外绕路' };
+    const direction = fortune.modifiers?.luckyDirection || '';
+    return `<section class="tf-card tf-fortune-result"><div class="tf-fortune-ticket"><small>${escapeHtml(fortune.date)}</small><span>${escapeHtml(fortune.sigil || '◇')}</span><b>${escapeHtml(fortune.label)}</b><strong>${Number(fortune.score)}</strong></div><div class="tf-fortune-result-copy"><span class="tf-fortune-theme">${escapeHtml(fortune.theme || '今日')}</span><h2>${escapeHtml(fortune.summary || '今天会平稳地过去。')}</h2><div class="tf-fortune-aspects">${Object.entries(fortune.aspects || {}).map(([key, value]) => `<div><span>${aspectLabels[key] || key}<b>${Number(value)}</b></span><progress max="100" value="${Number(value)}"></progress></div>`).join('')}</div><section class="tf-fortune-effects"><h3>今日影响</h3>${Object.entries(fortune.modifiers || {}).filter(([key]) => key !== 'luckyDirection').map(([key, value]) => `<span class="${Number(value) >= 0 ? 'is-positive' : 'is-negative'}"><b>${modifierLabels[key] || key}</b><em>${Number(value) >= 0 ? '+' : ''}${Number(value)}%</em></span>`).join('')}</section><p class="tf-fortune-explain">${direction ? `旅伴今天更想往${escapeHtml(direction)}边走。` : ''} 较低的运势会增加有趣的绕路，不会强制失败或覆盖你的选择。</p></div></section>`;
+}
+
+function getCompanionSpecies(species) {
+    const value = String(species || '').toLocaleLowerCase();
+    return COMPANION_SPECIES.find(item => value === item.name.toLocaleLowerCase()
+        || value === item.id
+        || (item.id === 'cat' && /猫|cat/.test(value))
+        || (item.id === 'frog' && /蛙|frog/.test(value))
+        || (item.id === 'rabbit' && /兔|rabbit|bunny/.test(value))
+        || (item.id === 'fox' && /狐|fox/.test(value))
+        || (item.id === 'penguin' && /企鹅|penguin/.test(value))
+        || (item.id === 'robo-bird' && /机械鸟|机器鸟|机巧鸟|bird|robo-bird/.test(value))) || null;
+}
+
+function getLocalCompanionTime(companion, date = new Date()) {
+    const automatic = date.getHours() >= 5 && date.getHours() < 9 ? 'dawn'
+        : date.getHours() >= 9 && date.getHours() < 17 ? 'day'
+            : date.getHours() >= 17 && date.getHours() < 20 ? 'dusk' : 'night';
+    const id = ['dawn', 'day', 'dusk', 'night'].includes(companion.timeOfDay) ? companion.timeOfDay : automatic;
+    return {
+        id,
+        automatic: companion.timeOfDay === 'auto' || !companion.timeOfDay,
+        ...({
+            dawn: { icon: '◒', label: '清晨' },
+            day: { icon: '○', label: '白天' },
+            dusk: { icon: '◐', label: '黄昏' },
+            night: { icon: '☾', label: '夜晚' },
+        }[id]),
+    };
+}
+
+function getLocalCompanionWeather(data, time, date = new Date()) {
+    const slot = Math.floor(date.getHours() / 4);
+    const dateKey = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}-${slot}`;
+    const source = `${dateKey}|${data.topic || ''}|${data.world.companion.name}|${data.world.companion.species}`;
+    let number = 2166136261;
+    for (const char of source) number = ((number ^ char.codePointAt(0)) * 16777619) >>> 0;
+    const weather = [
+        { id: 'sunny', icon: time.id === 'night' ? '☾' : '☀', label: time.id === 'night' ? '清夜' : '晴朗', note: time.id === 'night' ? '窗外安静，像素星光一闪一闪。' : '像素阳光暖暖地落进小窝。' },
+        { id: 'cloudy', icon: '☁', label: time.id === 'night' ? '夜间多云' : '多云', note: '几团软云正在缓慢经过。' },
+        { id: 'rain', icon: '▥', label: time.id === 'night' ? '夜雨' : '小雨', note: '细细的雨线落在窗外。' },
+        { id: 'wind', icon: '≋', label: time.id === 'night' ? '晚风' : '微风', note: '风把小叶片吹得转了几圈。' },
+        { id: 'snow', icon: '✣', label: time.id === 'night' ? '夜雪' : '飘雪', note: '屏幕里飘起轻轻的雪点。' },
+    ];
+    const manualId = data.world.companion.weather;
+    const selected = weather.find(item => item.id === manualId) || weather[number % weather.length];
+    return {
+        ...selected,
+        id: `${selected.id} is-time-${time.id}`,
+        label: `${time.label} · ${selected.label}`,
+        automatic: manualId === 'auto' || !manualId,
+        slot,
+        dateKey,
+    };
+}
+
+function renderPixelCompanion(species, status = 'home', mini = false) {
+    const kind = getCompanionSpecies(species)?.id || 'mystery';
+    const safeStatus = ['home', 'away', 'resting'].includes(status) ? status : 'home';
+    const shapes = {
+        frog: '<rect x="16" y="19" width="32" height="29"/><rect x="12" y="14" width="13" height="13"/><rect x="39" y="14" width="13" height="13"/><rect class="tf-pixel-cut" x="16" y="17" width="5" height="6"/><rect class="tf-pixel-cut" x="43" y="17" width="5" height="6"/><rect class="tf-pixel-cut" x="24" y="31" width="4" height="4"/><rect class="tf-pixel-cut" x="36" y="31" width="4" height="4"/><rect class="tf-pixel-cut" x="26" y="39" width="12" height="3"/><rect x="9" y="45" width="19" height="5"/><rect x="36" y="45" width="19" height="5"/>',
+        cat: '<path d="M14 22V10h4l8 8h12l8-8h4v32l-8 8H22l-8-8z"/><rect x="19" y="44" width="8" height="9"/><rect x="37" y="44" width="8" height="9"/><rect x="49" y="33" width="7" height="15"/><rect x="53" y="27" width="5" height="10"/><rect class="tf-pixel-cut" x="22" y="27" width="5" height="6"/><rect class="tf-pixel-cut" x="37" y="27" width="5" height="6"/><rect class="tf-pixel-cut" x="30" y="35" width="4" height="4"/><rect class="tf-pixel-cut" x="25" y="40" width="14" height="3"/>',
+        rabbit: '<rect x="18" y="6" width="9" height="24"/><rect x="37" y="6" width="9" height="24"/><rect x="14" y="23" width="36" height="28"/><rect x="10" y="32" width="8" height="14"/><rect x="46" y="32" width="8" height="14"/><rect x="18" y="48" width="10" height="7"/><rect x="36" y="48" width="10" height="7"/><rect class="tf-pixel-cut" x="22" y="30" width="5" height="6"/><rect class="tf-pixel-cut" x="37" y="30" width="5" height="6"/><rect class="tf-pixel-cut" x="30" y="38" width="4" height="4"/><rect class="tf-pixel-cut" x="27" y="43" width="10" height="3"/>',
+        fox: '<path d="M12 12h5l11 9h8l11-9h5v31l-9 9H21l-9-9z"/><path d="M46 38h10v5h4v10H48v-5H37z"/><rect class="tf-pixel-cut" x="20" y="28" width="5" height="6"/><rect class="tf-pixel-cut" x="39" y="28" width="5" height="6"/><rect class="tf-pixel-cut" x="30" y="35" width="5" height="5"/><rect class="tf-pixel-cut" x="25" y="42" width="15" height="3"/><rect class="tf-pixel-cut" x="16" y="16" width="4" height="7"/><rect class="tf-pixel-cut" x="44" y="16" width="4" height="7"/>',
+        penguin: '<rect x="23" y="9" width="18" height="5"/><rect x="17" y="14" width="30" height="34"/><rect x="12" y="25" width="7" height="20"/><rect x="45" y="25" width="7" height="20"/><rect x="20" y="47" width="10" height="7"/><rect x="34" y="47" width="10" height="7"/><rect class="tf-pixel-cut" x="23" y="20" width="5" height="6"/><rect class="tf-pixel-cut" x="36" y="20" width="5" height="6"/><rect class="tf-pixel-cut" x="27" y="31" width="10" height="13"/><rect x="27" y="28" width="10" height="5"/>',
+        'robo-bird': '<rect x="17" y="17" width="30" height="27"/><rect x="22" y="11" width="20" height="7"/><rect x="30" y="6" width="4" height="7"/><rect x="9" y="25" width="10" height="13"/><rect x="45" y="25" width="10" height="13"/><rect x="23" y="43" width="7" height="10"/><rect x="36" y="43" width="7" height="10"/><rect x="47" y="24" width="10" height="7"/><rect class="tf-pixel-cut" x="22" y="23" width="7" height="7"/><rect class="tf-pixel-cut" x="36" y="23" width="7" height="7"/><rect class="tf-pixel-cut" x="27" y="35" width="12" height="4"/>',
+        mystery: '<rect x="18" y="17" width="28" height="32"/><rect x="13" y="24" width="7" height="18"/><rect x="44" y="24" width="7" height="18"/><rect x="22" y="47" width="8" height="7"/><rect x="36" y="47" width="8" height="7"/><rect class="tf-pixel-cut" x="23" y="26" width="5" height="6"/><rect class="tf-pixel-cut" x="36" y="26" width="5" height="6"/><rect class="tf-pixel-cut" x="30" y="36" width="4" height="4"/>',
+    };
+    const details = {
+        frog: '<rect x="18" y="36" width="5" height="3"/><rect x="41" y="36" width="5" height="3"/>',
+        cat: '<rect x="30" y="20" width="4" height="6"/><rect x="20" y="36" width="7" height="2"/><rect x="37" y="36" width="7" height="2"/>',
+        rabbit: '<rect x="21" y="10" width="3" height="13"/><rect x="40" y="10" width="3" height="13"/><rect x="47" y="43" width="5" height="5"/>',
+        fox: '<rect x="28" y="39" width="10" height="6"/><rect x="49" y="42" width="7" height="4"/>',
+        penguin: '<rect x="28" y="34" width="8" height="9"/><rect x="25" y="50" width="4" height="3"/><rect x="35" y="50" width="4" height="3"/>',
+        'robo-bird': '<rect x="31" y="9" width="2" height="3"/><rect x="19" y="34" width="3" height="3"/><rect x="42" y="34" width="3" height="3"/>',
+        mystery: '<rect x="27" y="42" width="10" height="2"/>',
+    };
+    return `<svg class="tf-pixel-pet is-kind-${kind} is-${safeStatus}${mini ? ' is-mini' : ''}" viewBox="0 0 64 64" aria-hidden="true" shape-rendering="crispEdges"><g>${shapes[kind]}</g><g class="tf-pixel-detail">${details[kind]}</g></svg>`;
+}
+
+function renderCompanionAvatar(data, large = false) {
+    const companion = data.world.companion;
+    return `<span class="tf-avatar tf-companion-dm-avatar ${large ? 'tf-avatar-large' : ''}" role="img" aria-label="${escapeHtml(companion.species)}旅伴">${renderPixelCompanion(companion.species, companion.status, true)}</span>`;
+}
+
+function renderCompanionApp(data) {
+    const companion = data.world.companion;
+    const statusLabel = companion.status === 'away' ? `正在${companion.destination || '未知地方'}旅行` : companion.status === 'resting' ? '正在小窝休息' : '在小窝等待出发';
+    const statusCode = companion.status === 'away' ? 'TRIP' : companion.status === 'resting' ? 'REST' : 'HOME';
+    const mood = companion.mood || '平静';
+    const bond = Math.max(0, Math.min(100, Number(companion.bond || 0)));
+    const bondLevel = Math.ceil(bond / 20);
+    const bondMeter = Array.from({ length: 5 }, (_, index) => `<i class="${index < bondLevel ? 'is-filled' : ''}"></i>`).join('');
+    const portrait = renderStoredImage({ url: companion.avatarUrl, alt: `${companion.name}的照片`, className: 'tf-companion-photo' })
+        || `<span class="tf-pixel-avatar" role="img" aria-label="${escapeHtml(companion.species)}像素宠物">${renderPixelCompanion(companion.species, companion.status)}</span>`;
+    const speciesOptions = COMPANION_SPECIES.map(species => {
+        const selected = getCompanionSpecies(companion.species)?.id === species.id && !companion.avatarUrl;
+        return `<button type="button" class="tf-pet-species-option ${selected ? 'is-selected' : ''}" data-action="choose-companion-species" data-species-id="${species.id}" aria-pressed="${selected}"><span>${renderPixelCompanion(species.name, 'home', true)}</span><b>${species.name}</b></button>`;
+    }).join('');
+    return `<div class="tf-companion-page"><section class="tf-card tf-companion-home"><div class="tf-pet-console-wrap"><div class="tf-pet-console"><div class="tf-pet-console-brand"><span>POCKET TRAVELER</span><b>旅伴机 01</b></div><div class="tf-pet-screen-bezel"><div class="tf-pet-screen"><div class="tf-pet-screen-top"><b>${statusCode}</b><span>${escapeHtml(mood)}</span><span class="tf-pet-signal"><i></i><i></i><i></i></span></div><div class="tf-pet-stage">${portrait}<span class="tf-pet-cloud is-one"></span><span class="tf-pet-cloud is-two"></span><span class="tf-pet-ground"></span></div><div class="tf-pet-screen-bottom"><span>${escapeHtml(companion.species)}</span><span>♥ ${String(bond).padStart(3, '0')}</span></div></div></div><div class="tf-pet-device-controls"><button type="button" data-action="focus-companion-field" data-field="name" aria-label="编辑宠物档案"><i></i><span>DATA</span></button><button type="button" data-action="focus-companion-field" data-field="carrying" aria-label="编辑宠物行囊"><i></i><span>PACK</span></button><button type="button" data-action="${companion.status === 'away' ? 'companion-return' : 'refresh-world-module'}" ${companion.status === 'away' ? '' : 'data-module-id="travel"'} ${viewState.moduleBusy.has('travel') ? 'disabled' : ''} aria-label="${companion.status === 'away' ? '让宠物回家' : '让宠物出发'}"><i></i><span>${companion.status === 'away' ? 'HOME' : 'TRIP'}</span></button></div></div></div><div class="tf-companion-status"><span class="tf-pet-kicker">MY LITTLE TRAVELER · ${statusCode}</span><div class="tf-companion-title"><div><h2>${escapeHtml(companion.name)}</h2><small>${escapeHtml(companion.species)}</small></div><b>${escapeHtml(statusLabel)}</b></div><div class="tf-pet-message"><span>MESSAGE</span><p>${escapeHtml(companion.message || '它正安静地看着你。')}</p></div><div class="tf-pet-stats"><div><small>心情 MOOD</small><b>${escapeHtml(mood)}</b></div><div><small>亲密 BOND</small><span class="tf-pet-bond-meter">${bondMeter}</span></div><div><small>行囊 PACK</small><b>${escapeHtml(companion.carrying || '还没有准备')}</b></div></div><footer><button class="tf-primary-button tf-pet-main-action" data-action="refresh-world-module" data-module-id="travel" ${viewState.moduleBusy.has('travel') ? 'disabled' : ''}>${viewState.moduleBusy.has('travel') ? '<span class="tf-spinner"></span>' : icon('sparkles')}${companion.status === 'away' ? '接收新的旅行讯号' : '让它自由出发'}</button>${companion.status === 'away' ? '<button class="tf-secondary-button" data-action="companion-return">等它回家</button>' : ''}</footer></div></section><section class="tf-card tf-companion-settings"><header><div><span class="tf-pet-section-code">PROFILE MODE</span><h3>选择你的旅伴</h3><p>挑选内置像素形象，或者写下属于这个世界的特殊宠物。</p></div></header><div class="tf-pet-species-grid">${speciesOptions}</div><div class="tf-companion-profile-grid"><label><span>名字</span><input data-companion-field="name" value="${escapeHtml(companion.name)}" maxlength="32"></label><label><span>自定义种类</span><input data-companion-field="species" value="${escapeHtml(companion.species)}" placeholder="例如：史莱姆、龙、机械犬"></label><label class="is-wide"><span>准备的行囊</span><input data-companion-field="carrying" value="${escapeHtml(companion.carrying)}" placeholder="食物、护符、地图……"></label></div></section></div>`;
+}
+
+function renderCompanionAppV2(data) {
+    const companion = data.world.companion;
+    const statusLabel = companion.status === 'away' ? `正在${companion.destination || '附近'}旅行` : companion.status === 'resting' ? '正在小窝休息' : '在小窝等你';
+    const statusCode = companion.status === 'away' ? 'TRIP' : companion.status === 'resting' ? 'REST' : 'HOME';
+    const bond = Math.max(0, Math.min(100, Number(companion.bond || 0)));
+    const portrait = `<span class="tf-pixel-avatar" role="img" aria-label="${escapeHtml(companion.species)}像素宠物">${renderPixelCompanion(companion.species, companion.status)}</span>`;
+    const fortune = data.world.fortune;
+    const luckyDirection = fortune?.modifiers?.luckyDirection || companion.luckyDirection || '';
+    const actionCopy = { feed: '吃得很香，满足地晃了晃。', pet: '它靠近你的手心蹭了蹭。', play: '一起玩了一会儿，精神变好了！', rest: '盖好小毯子，进入省电休息模式。', depart: '带好行囊，朝新的方向出发了。', signal: '收到了一枚来自旅途的像素讯号。' };
+    const speciesOptions = COMPANION_SPECIES.map(species => {
+        const selected = getCompanionSpecies(companion.species)?.id === species.id && !companion.avatarUrl;
+        return `<button type="button" class="tf-pet-species-option ${selected ? 'is-selected' : ''}" data-action="choose-companion-species" data-species-id="${species.id}" aria-pressed="${selected}"><span>${renderPixelCompanion(species.name, 'home', true)}</span><b>${species.name}</b></button>`;
+    }).join('');
+    const stat = (label, value) => `<div><span>${label}<b>${Number(value)}</b></span><progress max="100" value="${Number(value)}"></progress></div>`;
+    return `<div class="tf-companion-page tf-companion-v2 is-action-${escapeHtml(companion.lastAction || 'idle')}"><section class="tf-card tf-companion-home"><div class="tf-pet-console-wrap"><div class="tf-pet-console"><div class="tf-pet-console-brand"><span>POCKET TRAVELER</span><b>旅伴机 01</b></div><div class="tf-pet-screen-bezel"><div class="tf-pet-screen"><div class="tf-pet-screen-top"><b>${statusCode}</b><span>${escapeHtml(companion.mood || '好奇')}</span><span class="tf-pet-signal"><i></i><i></i><i></i></span></div><div class="tf-pet-stage">${portrait}<span class="tf-pet-action-fx"><i>✦</i><i>♥</i><i>•</i></span><span class="tf-pet-cloud is-one"></span><span class="tf-pet-cloud is-two"></span><span class="tf-pet-ground"></span></div><div class="tf-pet-screen-bottom"><span>${escapeHtml(companion.species)}</span><span>♥ ${String(bond).padStart(3, '0')}</span></div></div></div><div class="tf-pet-device-controls"><button type="button" data-action="companion-care" data-care="feed"><i></i><span>FEED</span></button><button type="button" data-action="companion-care" data-care="pet"><i></i><span>PET</span></button><button type="button" data-action="companion-care" data-care="play"><i></i><span>PLAY</span></button></div></div></div><div class="tf-companion-status"><span class="tf-pet-kicker">MY LITTLE TRAVELER · ${statusCode}</span><div class="tf-companion-title"><div><h2>${escapeHtml(companion.name)}</h2><small>${escapeHtml(companion.species)}</small></div><b>${escapeHtml(statusLabel)}</b></div><div class="tf-pet-message"><span>${companion.lastAction ? 'REACTION' : 'MESSAGE'}</span><p>${escapeHtml(companion.lastAction ? actionCopy[companion.lastAction] || companion.message : companion.message || '它正安静地看着你。')}</p></div><div class="tf-pet-vitals">${stat('饱腹', companion.satiety ?? 75)}${stat('体力', companion.energy ?? 80)}${stat('快乐', companion.happiness ?? 70)}</div>${luckyDirection ? `<div class="tf-pet-luck-note">${icon('sparkles')}<span>今日幸运方向：<b>${escapeHtml(luckyDirection)}</b> · 运势会影响见闻、绕路与纪念品概率</span></div>` : ''}<div class="tf-pet-care-actions"><button data-action="companion-care" data-care="feed"><span>🍪</span><b>喂食</b></button><button data-action="companion-care" data-care="pet"><span>🖐</span><b>摸摸</b></button><button data-action="companion-care" data-care="play"><span>🧶</span><b>玩耍</b></button><button data-action="companion-care" data-care="rest"><span>☾</span><b>休息</b></button></div><footer><button class="tf-primary-button tf-pet-main-action" data-action="${companion.status === 'away' ? 'companion-signal-local' : 'companion-depart-local'}">${icon(companion.status === 'away' ? 'message' : 'repost')}${companion.status === 'away' ? '等待旅途讯号（本地）' : '让它自由出发（本地）'}</button>${companion.status === 'away' ? '<button class="tf-secondary-button" data-action="companion-return">接它回家</button>' : ''}</footer></div></section><section class="tf-card tf-companion-settings"><header><div><span class="tf-pet-section-code">PROFILE MODE</span><h3>选择你的旅伴</h3><p>每一种旅伴在小窝和私信中都会使用自己的专属像素形象。</p></div></header><div class="tf-pet-species-grid">${speciesOptions}</div><div class="tf-companion-profile-grid"><label><span>名字</span><input data-companion-field="name" value="${escapeHtml(companion.name)}" maxlength="32"></label><label><span>自定义种类</span><input data-companion-field="species" value="${escapeHtml(companion.species)}" placeholder="例如：史莱姆、龙、机械犬"></label><label class="is-wide"><span>准备的行囊</span><input data-companion-field="carrying" value="${escapeHtml(companion.carrying)}" placeholder="食物、护符、地图……"></label></div></section></div>`;
+}
+
+function renderCompanionAppV3(data) {
+    const companion = data.world.companion;
+    const time = getLocalCompanionTime(companion);
+    const weather = getLocalCompanionWeather(data, time);
+    const statusLabel = companion.status === 'away' ? `正在${companion.destination || '附近'}旅行` : companion.status === 'resting' ? '正在小窝休息' : '在小窝等你';
+    const statusCode = companion.status === 'away' ? 'TRIP' : companion.status === 'resting' ? 'REST' : 'HOME';
+    const bond = Math.max(0, Math.min(100, Number(companion.bond || 0)));
+    const fortune = data.world.fortune;
+    const luckyDirection = fortune?.modifiers?.luckyDirection || companion.luckyDirection || '';
+    const skin = COMPANION_DEVICE_SKINS.find(item => item.id === companion.deviceSkin) || COMPANION_DEVICE_SKINS[0];
+    const menuItems = [
+        { id: 'feed', symbol: '●', label: '喂食' },
+        { id: 'pet', symbol: '♥', label: '摸摸' },
+        { id: 'play', symbol: '◆', label: '玩耍' },
+        { id: 'rest', symbol: '☾', label: '休息' },
+    ];
+    const menuIndex = Math.max(0, Math.min(menuItems.length - 1, Number(viewState.companionMenuIndex || 0)));
+    const actionCopy = { feed: '吃得很香，满足地晃了晃。', pet: '它靠近你的手心蹭了蹭。', play: '追着像素小球跑了好几圈！', rest: '盖好小毯子，进入省电休息模式。', depart: '带好行囊，朝新的方向出发了。', signal: '收到了一枚来自旅途的像素讯号。' };
+    const portrait = `<button class="tf-pet-sprite-control" data-action="companion-care" data-care="pet" title="摸摸${escapeHtml(companion.name)}"><span class="tf-pixel-avatar" role="img" aria-label="${escapeHtml(companion.species)}像素宠物">${renderPixelCompanion(companion.species, companion.status)}</span></button>`;
+    const speciesOptions = COMPANION_SPECIES.map(species => {
+        const selected = getCompanionSpecies(companion.species)?.id === species.id;
+        return `<button type="button" class="tf-pet-species-option ${selected ? 'is-selected' : ''}" data-action="choose-companion-species" data-species-id="${species.id}" aria-pressed="${selected}"><span>${renderPixelCompanion(species.name, 'home', true)}</span><b>${species.name}</b></button>`;
+    }).join('');
+    const customSelected = !getCompanionSpecies(companion.species);
+    let deviceOptions = COMPANION_DEVICE_SKINS.map(item => `<button type="button" class="tf-device-skin-option ${skin.id === item.id ? 'is-selected' : ''}" data-action="choose-companion-device" data-device-skin="${item.id}"><span class="tf-device-swatch is-${item.id}"><i></i><b></b></span><div><b>${item.name}</b><small>${item.note}</small></div></button>`).join('');
+    const environmentControls = `<div class="tf-pet-environment-controls"><label><span>小窝天气</span><select data-companion-environment="weather"><option value="auto" ${companion.weather === 'auto' ? 'selected' : ''}>自动（本地时段）</option><option value="sunny" ${companion.weather === 'sunny' ? 'selected' : ''}>晴朗</option><option value="cloudy" ${companion.weather === 'cloudy' ? 'selected' : ''}>多云</option><option value="rain" ${companion.weather === 'rain' ? 'selected' : ''}>小雨</option><option value="wind" ${companion.weather === 'wind' ? 'selected' : ''}>微风</option><option value="snow" ${companion.weather === 'snow' ? 'selected' : ''}>飘雪</option></select></label><label><span>小窝时间</span><select data-companion-environment="timeOfDay"><option value="auto" ${companion.timeOfDay === 'auto' ? 'selected' : ''}>自动（本地时间）</option><option value="dawn" ${companion.timeOfDay === 'dawn' ? 'selected' : ''}>清晨</option><option value="day" ${companion.timeOfDay === 'day' ? 'selected' : ''}>白天</option><option value="dusk" ${companion.timeOfDay === 'dusk' ? 'selected' : ''}>黄昏</option><option value="night" ${companion.timeOfDay === 'night' ? 'selected' : ''}>夜晚</option></select></label></div>`;
+    deviceOptions = `${environmentControls}${deviceOptions}`;
+    const stat = (label, value) => `<div><span>${label}<b>${Number(value)}</b></span><progress max="100" value="${Number(value)}"></progress></div>`;
+    const animationLayer = `<span class="tf-pet-animation-layer" aria-hidden="true"><span class="tf-feed-drop"><i></i><i></i><i></i><i></i></span><span class="tf-pet-hearts"><i>♥</i><i>♥</i><i>♥</i><i>♥</i></span><span class="tf-play-ball">◆</span><span class="tf-play-trail"><i></i><i></i><i></i></span><span class="tf-sleep-cloud"><i>Z</i><i>z</i><i>z</i></span><span class="tf-touch-rings"><i></i><i></i><i></i></span><span class="tf-pet-stars"><i>✦</i><i>·</i><i>✦</i><i>·</i></span></span>`;
+    const weatherLayer = `<span class="tf-pet-weather" aria-hidden="true"><span class="tf-weather-sun"><i></i></span><span class="tf-weather-moon">☾<i>·</i><i>·</i><i>·</i></span><span class="tf-weather-cloud"><i></i><i></i></span><span class="tf-weather-rain">${'<i></i>'.repeat(8)}</span><span class="tf-weather-snow"><i>✣</i><i>·</i><i>✣</i><i>·</i><i>✣</i><i>·</i></span><span class="tf-weather-wind"><i></i><i></i><i></i><b>◆</b></span></span>`;
+    return `<div class="tf-companion-page tf-companion-v3 is-device-${skin.id} is-action-${escapeHtml(companion.lastAction || 'idle')} is-weather-${weather.id}"><section class="tf-card tf-companion-home"><div class="tf-pet-console-wrap"><div class="tf-pet-console"><div class="tf-pet-console-brand"><span>${skin.id === 'terminal' ? 'FIELD UNIT' : skin.id === 'arcane' ? 'FAMILIAR LINK' : 'POCKET TRAVELER'}</span><b>${escapeHtml(skin.name)}</b></div><div class="tf-pet-screen-bezel"><div class="tf-pet-screen"><div class="tf-pet-screen-top"><b>${statusCode}</b><span>${escapeHtml(companion.mood || '好奇')}</span><span class="tf-pet-signal"><i></i><i></i><i></i></span></div><div class="tf-pet-stage">${portrait}${animationLayer}${weatherLayer}<span class="tf-pet-cloud is-one"></span><span class="tf-pet-cloud is-two"></span><span class="tf-pet-ground"></span></div><div class="tf-pet-screen-menu">${menuItems.map((item, index) => `<button class="${index === menuIndex ? 'is-selected' : ''}" data-action="companion-care" data-care="${item.id}" title="${item.label}"><span>${item.symbol}</span><b>${item.label}</b></button>`).join('')}</div><div class="tf-pet-screen-bottom"><span>${escapeHtml(companion.species)}</span><span title="${escapeHtml(weather.note)}">${weather.icon} ${escapeHtml(weather.label)}</span><span>♥ ${String(bond).padStart(3, '0')}</span></div></div></div><div class="tf-pet-device-controls"><button type="button" data-action="companion-menu-nav" data-direction="-1" aria-label="上一个功能"><i></i><span>PREV</span></button><button type="button" data-action="companion-menu-confirm" aria-label="确认当前功能"><i></i><span>OK</span></button><button type="button" data-action="companion-menu-nav" data-direction="1" aria-label="下一个功能"><i></i><span>NEXT</span></button></div></div></div><div class="tf-companion-status"><span class="tf-pet-kicker">MY LITTLE TRAVELER · ${statusCode}</span><div class="tf-companion-title"><div><h2>${escapeHtml(companion.name)}</h2><small>${escapeHtml(companion.species)}</small></div><b>${escapeHtml(statusLabel)}</b></div><div class="tf-pet-message"><span>${companion.lastAction ? 'REACTION LOG' : 'MESSAGE'}</span><p>${escapeHtml(companion.lastAction ? actionCopy[companion.lastAction] || companion.message : companion.message || '它正安静地看着你。')}</p><small>直接在左侧宠物机内操作 · 本地运行</small></div><div class="tf-pet-vitals">${stat('饱腹', companion.satiety ?? 75)}${stat('体力', companion.energy ?? 80)}${stat('快乐', companion.happiness ?? 70)}</div><div class="tf-pet-info-strip"><span><small>亲密</small><b>${bond}</b></span><span><small>行囊</small><b>${escapeHtml(companion.carrying || '未准备')}</b></span><span class="tf-weather-summary" title="${escapeHtml(weather.note)}"><small>天气</small><b>${weather.icon} ${escapeHtml(weather.label)}</b></span>${luckyDirection ? `<span><small>幸运方向</small><b>${escapeHtml(luckyDirection)}</b></span>` : ''}</div>${luckyDirection ? `<div class="tf-pet-luck-note">${icon('sparkles')}<span>运势会影响旅途见闻、绕路与纪念品概率。</span></div>` : ''}<footer class="tf-pet-trip-actions"><button class="tf-primary-button tf-pet-main-action" data-action="${companion.status === 'away' ? 'companion-signal-local' : 'companion-depart-local'}">${icon(companion.status === 'away' ? 'message' : 'repost')}${companion.status === 'away' ? '等待旅途讯号（本地）' : '准备好后自由出发'}</button>${companion.status === 'away' ? '<button class="tf-secondary-button" data-action="companion-return">接它回家</button>' : ''}</footer></div></section><details class="tf-card tf-companion-profile-card" ${viewState.companionProfileOpen ? 'open' : ''}><summary data-action="toggle-companion-profile"><span class="tf-companion-profile-avatar">${renderPixelCompanion(companion.species, 'home', true)}</span><div><small>TRAVELER PROFILE</small><h3>${escapeHtml(companion.name)} · ${escapeHtml(companion.species)}</h3><p>${escapeHtml(skin.name)} · 点击展开更换旅伴或设备</p></div><span class="tf-profile-expand">编辑档案⌄</span></summary><div class="tf-companion-profile-content"><section><header><div><h3>旅伴图鉴</h3><p>更换形象不会清除亲密度、行囊和旅行记录。</p></div></header><div class="tf-pet-species-grid tf-pet-species-compact">${speciesOptions}<button type="button" class="tf-pet-species-option is-custom ${customSelected ? 'is-selected' : ''}" data-action="choose-companion-custom"><span>＋</span><b>自定义</b></button></div><div class="tf-companion-profile-grid"><label><span>名字</span><input data-companion-field="name" value="${escapeHtml(companion.name)}" maxlength="32"></label>${customSelected ? `<label><span>自定义种类</span><input data-companion-field="species" value="${escapeHtml(companion.species === '自定义旅伴' ? '' : companion.species)}" placeholder="例如：史莱姆、龙、机械犬"></label>` : ''}<label class="is-wide"><span>准备的行囊</span><input data-companion-field="carrying" value="${escapeHtml(companion.carrying)}" placeholder="食物、护符、地图……"></label></div></section><section class="tf-device-skin-section"><header><div><h3>设备外观</h3><p>只改变机身结构、屏幕色调和动画风格，不改变宠物数据。</p></div></header><div class="tf-device-skin-grid">${deviceOptions}</div></section></div></details></div>`;
+}
+
+function getCompanionHabit(companion) {
+    return COMPANION_HABITS[getCompanionSpecies(companion.species)?.id || 'mystery'] || COMPANION_HABITS.mystery;
+}
+
+function getCompanionWeatherReaction(data) {
+    const companion = data.world.companion;
+    const time = getLocalCompanionTime(companion);
+    const weather = getLocalCompanionWeather(data, time);
+    const weatherId = weather.id.split(' ')[0];
+    return getCompanionHabit(companion).weather[weatherId] || [weather.note, companion.mood || '平静'];
+}
+
+function getCompanionAmbientReaction(data) {
+    const companion = data.world.companion;
+    if (companion.status === 'away') return companion.message || '它正在旅途中观察周围。';
+    if (Number(companion.satiety || 0) < 22) return '它不时看向食物菜单，肚子像是有点饿了。';
+    if (Number(companion.energy || 0) < 22) return '它的动作慢了下来，正在寻找适合打盹的位置。';
+    if (Number(companion.happiness || 0) < 28) return '它安静地靠近屏幕边缘，希望有人陪一会儿。';
+    if (companion.lastAction && companion.message) return companion.message;
+    return getCompanionWeatherReaction(data)[0];
+}
+
+function renderCompanionAppV4(data) {
+    const companion = data.world.companion;
+    const speciesId = getCompanionSpecies(companion.species)?.id || 'mystery';
+    const moodClass = Number(companion.energy || 0) < 22 ? 'sleepy' : Number(companion.satiety || 0) < 22 ? 'hungry' : Number(companion.happiness || 0) >= 82 ? 'joyful' : Number(companion.happiness || 0) < 35 ? 'lonely' : 'calm';
+    let html = renderCompanionAppV3(data)
+        .replace('tf-companion-v3 ', `tf-companion-v3 tf-companion-v4 is-species-${speciesId} is-mood-${moodClass} `)
+        .replace(/<div class="tf-pet-message">[\s\S]*?<\/div><div class="tf-pet-vitals">/, `<div class="tf-pet-message"><span>LIVE REACTION · ${escapeHtml(companion.mood || '平静')}</span><p>${escapeHtml(getCompanionAmbientReaction(data))}</p><small>反应由种类、天气、时间与当前状态在本地计算</small></div><div class="tf-pet-vitals">`);
+    if (viewState.companionFoodMenuOpen) {
+        const selected = Math.max(0, Math.min(COMPANION_FOODS.length - 1, Number(viewState.companionFoodIndex || 0)));
+        const menu = `<div class="tf-pet-screen-menu tf-pet-food-select"><header><b>CHOOSE FOOD</b><button data-action="companion-food-back">×</button></header><div>${COMPANION_FOODS.map((food, index) => `<button class="${index === selected ? 'is-selected' : ''}" data-action="companion-feed-food" data-food-id="${food.id}" title="${food.name}"><span>${food.symbol}</span><b>${food.name}</b></button>`).join('')}</div></div>`;
+        html = html.replace(/<div class="tf-pet-screen-menu">[\s\S]*?<\/div><div class="tf-pet-screen-bottom">/, `${menu}<div class="tf-pet-screen-bottom">`);
+    }
+    return html;
+}
+
+function renderInventoryApp(data) {
+    const items = [...data.world.inventory].reverse();
+    return `<section class="tf-card tf-world-board tf-world-board-page"><header><div><h3>我的背包</h3><p>任务奖励、旅伴带回的物件和剧情道具。</p></div><span>${items.filter(item => !item.consumed && item.quantity > 0).length} 种物品</span></header><div>${items.length ? items.map(item => `<article class="${item.consumed ? 'is-finished' : ''}" data-world-item-id="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.name)} ×${Number(item.quantity)}</b><small>${escapeHtml(item.source || '来源不明')}</small><p>${escapeHtml(item.description)}</p>${item.effect ? `<span>${escapeHtml(item.effect)}</span>` : ''}</div><footer>${item.usable && !item.consumed ? '<button data-action="use-inventory-item">使用</button>' : ''}<button class="tf-danger-text" data-action="delete-world-item" data-kind="inventory">删除</button></footer></article>`).join('') : '<p class="tf-empty-mini">背包还是空的</p>'}</div></section>`;
+}
+
+function renderHealthApp(data) {
+    const items = [...data.world.health].reverse();
+    return `<section class="tf-card tf-world-board tf-world-board-page"><header><div><h3>角色状态</h3><p>只记录虚构角色的身体事件与恢复进度。</p></div><span>${items.filter(item => item.status !== 'resolved').length} 项进行中</span></header><div>${items.length ? items.map(item => `<article class="${item.status === 'resolved' ? 'is-finished' : ''}" data-world-item-id="${escapeHtml(item.id)}"><div><b>${escapeHtml(item.subject)} · ${escapeHtml(item.name)}</b><small>${escapeHtml(item.severity)} · ${escapeHtml(item.status)}</small><p>${escapeHtml(item.symptoms)}</p>${item.storyEffect ? `<span>${escapeHtml(item.storyEffect)}</span>` : ''}</div><footer>${item.status !== 'resolved' ? '<button data-action="advance-health-status">推进恢复</button>' : ''}<button class="tf-danger-text" data-action="delete-world-item" data-kind="health">删除</button></footer></article>`).join('') : '<p class="tf-empty-mini">目前没有身体事件</p>'}</div></section>`;
+}
+
+function renderHealthAppV2(data) {
+    const items = [...data.world.health].reverse();
+    const active = items.filter(item => item.status !== 'resolved');
+    const roles = getRoleLibrary(data).filter(npc => !npc.blocked);
+    const stageLabels = { onset: '刚出现', noticed: '留意中', seeking: '寻找帮助', consulting: '问诊中', treating: '处理中', recovering: '恢复中', resolved: '已结束' };
+    const severityLabels = { minor: '轻微', moderate: '需要留意', serious: '较严重' };
+    return `<section class="tf-health-app"><header class="tf-card tf-health-hero"><div><small>LOCAL WELLNESS SERVICE</small><h2>健康与医疗</h2><p>让“长智齿、感冒、失眠”等虚构日常事件在论坛内形成发现、求助、就医和恢复的互动链。</p></div><div class="tf-health-start"><select id="tf-health-subject"><option value="">${escapeHtml(getMyDisplayName())}</option>${roles.map(npc => `<option value="${escapeHtml(npc.id)}">${escapeHtml(npc.name)}</option>`).join('')}</select><button class="tf-primary-button" data-action="create-local-health">触发一个日常事件</button><small>本地生成 · 不调用 API</small></div></header><div class="tf-health-list">${items.length ? items.map(item => {
+        const providerNpc = item.providerNpcId ? data.npcs.find(npc => npc.id === item.providerNpcId) : null;
+        const stages = ['noticed', 'seeking', 'consulting', 'treating', 'recovering', 'resolved'];
+        const currentIndex = Math.max(0, stages.indexOf(item.stage || (item.status === 'resolved' ? 'resolved' : 'noticed')));
+        return `<article class="tf-card tf-health-case ${item.status === 'resolved' ? 'is-resolved' : ''}" data-world-item-id="${escapeHtml(item.id)}"><header><div><span>${escapeHtml(severityLabels[item.severity] || item.severity)}</span><h3>${escapeHtml(item.subject)} · ${escapeHtml(item.name)}</h3><p>${escapeHtml(item.symptoms)}</p></div><b>${escapeHtml(stageLabels[item.stage] || item.status)}</b></header><div class="tf-health-progress">${stages.map((stage, index) => `<i class="${index <= currentIndex ? 'is-done' : ''}" title="${stageLabels[stage]}"></i>`).join('')}<progress max="100" value="${Number(item.progress || 0)}"></progress></div>${item.provider ? `<div class="tf-health-provider">${icon('heart')}<div><small>正在提供帮助</small><b>${escapeHtml(item.provider)}</b>${item.careNote ? `<p>${escapeHtml(item.careNote)}</p>` : ''}</div>${providerNpc ? `<button class="tf-secondary-button" data-action="open-npc" data-npc-id="${escapeHtml(providerNpc.id)}">查看角色</button>` : ''}</div>` : `<p class="tf-health-story">${escapeHtml(item.storyEffect || '可以先观察，也可以寻找帮助。')}</p>`}<footer>${item.status !== 'resolved' ? `${!['seeking', 'consulting', 'treating', 'recovering'].includes(item.stage) ? '<button data-action="health-observe">先观察</button><button data-action="health-find-provider">寻找医生</button>' : ''}${item.stage === 'seeking' ? '<button data-action="health-consult">开始问诊</button>' : ''}${['consulting', 'treating'].includes(item.stage) ? '<button data-action="health-treat">按方案处理</button>' : ''}${item.stage === 'recovering' ? '<button data-action="health-resolve">确认恢复</button>' : ''}` : '<em>这段身体事件已经结束</em>'}<button class="tf-danger-text" data-action="delete-world-item" data-kind="health">删除记录</button></footer></article>`;
+    }).join('') : '<div class="tf-card tf-empty tf-health-empty"><div class="tf-empty-icon">'+icon('heart')+'</div><div><h3>今天没有身体事件</h3><p>需要时可以本地触发；不依赖正文，也不会自动调用模型。</p></div></div>'}</div>${active.length ? '<p class="tf-fictional-care-note">仅用于虚构故事互动，不提供现实医疗判断。</p>' : ''}</section>`;
+}
+
+function getHealthSceneMeta(item) {
+    const source = `${item.name || ''} ${item.symptoms || ''}`;
+    if (/智齿|牙|口腔/.test(source)) return { id: 'tooth', symbol: '牙', label: '口腔护理', prop: '漱口杯', tint: '#fff0f3', accent: '#d46f88', note: '脸颊需要一点温柔照顾' };
+    if (/感冒|喷嚏|嗓子|发热/.test(source)) return { id: 'cold', symbol: '暖', label: '感冒照护', prop: '毛毯', tint: '#edf6ff', accent: '#6598c7', note: '裹好毯子，慢慢恢复精神' };
+    if (/过敏|发痒|鼻子/.test(source)) return { id: 'allergy', symbol: '敏', label: '过敏观察', prop: '纸巾', tint: '#fff4e8', accent: '#d58a50', note: '先把可能的诱因放远一点' };
+    if (/失眠|睡|疲劳/.test(source)) return { id: 'sleep', symbol: '眠', label: '睡眠关怀', prop: '夜灯', tint: '#f1efff', accent: '#8075c7', note: '把灯调暗，让今天慢下来' };
+    if (/肠胃|胃|食欲/.test(source)) return { id: 'stomach', symbol: '胃', label: '肠胃照护', prop: '温水', tint: '#eff8ed', accent: '#73a16c', note: '温水与清淡食物已经备好' };
+    if (/扭伤|脚踝|肿痛/.test(source)) return { id: 'sprain', symbol: '护', label: '行动保护', prop: '靠垫', tint: '#eef7f7', accent: '#5e9d9c', note: '今天先把脚步放慢一点' };
+    if (/肌肉|肩背|酸痛/.test(source)) return { id: 'muscle', symbol: '舒', label: '舒缓护理', prop: '热敷袋', tint: '#fff1ec', accent: '#cb8069', note: '热敷与休息都已安排上' };
+    return { id: 'general', symbol: '心', label: '日常关怀', prop: '记录卡', tint: '#fff1f5', accent: '#c97b91', note: '有人正在认真关注这件事' };
+}
+
+function renderHealthAppV3(data) {
+    const items = [...data.world.health].reverse();
+    const active = items.filter(item => item.status !== 'resolved');
+    const roles = getRoleLibrary(data).filter(npc => !npc.blocked);
+    const stages = ['noticed', 'seeking', 'consulting', 'treating', 'recovering', 'resolved'];
+    const stageLabels = { onset: '刚出现', noticed: '留意中', seeking: '寻找帮助', consulting: '问诊中', treating: '处理中', recovering: '恢复中', resolved: '已结束' };
+    const severityLabels = { minor: '轻微', moderate: '需要留意', serious: '较严重' };
+    const stageAction = item => item.status === 'resolved' ? '<em>这段身体事件已经结束</em>'
+        : `${!['seeking', 'consulting', 'treating', 'recovering'].includes(item.stage) ? '<button data-action="health-observe">先观察</button><button data-action="health-find-provider">寻找医生</button>' : ''}${item.stage === 'seeking' ? '<button data-action="health-consult">开始问诊</button>' : ''}${['consulting', 'treating'].includes(item.stage) ? '<button data-action="health-treat">按方案处理</button>' : ''}${item.stage === 'recovering' ? '<button data-action="health-resolve">确认恢复</button>' : ''}`;
+    const cards = items.map(item => {
+        const providerNpc = item.providerNpcId ? data.npcs.find(npc => npc.id === item.providerNpcId) : null;
+        const subjectNpc = item.subjectNpcId ? data.npcs.find(npc => npc.id === item.subjectNpcId) : null;
+        const profile = getSettings().profile;
+        const scene = getHealthSceneMeta(item);
+        const patientAvatarUrl = subjectNpc?.avatarUrl || (!item.subjectNpcId ? profile.avatarUrl : '');
+        const patientAvatarKey = subjectNpc?.avatarKey || (!item.subjectNpcId ? profile.avatarKey : '');
+        const patientImage = renderStoredImage({ url: patientAvatarUrl, imageKey: patientAvatarKey, alt: item.subject, className: 'tf-care-portrait-image' });
+        const patientPortrait = `<span class="tf-care-portrait ${patientImage ? 'has-image' : 'is-fallback'}">${icon('user')}${patientImage}</span>`;
+        const stage = stages.includes(item.stage) ? item.stage : item.status === 'resolved' ? 'resolved' : 'noticed';
+        const currentIndex = Math.max(0, stages.indexOf(stage));
+        const providerScene = currentIndex >= 1 ? `<span class="tf-care-character is-helper ${providerNpc ? 'has-avatar' : ''}"><span class="tf-care-character-head">${providerNpc ? renderAvatar(providerNpc.name, { npcId: providerNpc.id, avatarUrl: providerNpc.avatarUrl, avatarKey: providerNpc.avatarKey }) : `<span class="tf-care-portrait is-provider-fallback">${icon('heart')}</span>`}</span><span class="tf-care-character-body"><i></i><i></i></span><small>${escapeHtml(item.provider || '护理助手')}</small></span>` : '';
+        const progress = Math.max(0, Math.min(100, Number(item.progress || 0)));
+        const progressLabel = stage === 'resolved' ? '恢复完成' : stage === 'recovering' ? '恢复进度' : '处理进度';
+        const stepLabels = { noticed: '发现', seeking: '找帮助', consulting: '问诊', treating: '处理', recovering: '恢复', resolved: '完成' };
+        return `<article class="tf-card tf-health-case tf-health-case-v3 is-stage-${stage} is-severity-${escapeHtml(item.severity)} ${item.status === 'resolved' ? 'is-resolved' : ''}" data-world-item-id="${escapeHtml(item.id)}">
+            <div class="tf-care-scene is-care-${scene.id} is-scene-stage-${stage}" style="--care-tint:${scene.tint};--care-accent:${scene.accent}" aria-label="${escapeHtml(`${scene.label}，${stageLabels[stage]}`)}">
+                <header><span class="tf-care-scene-title">${icon('heart')}<b>${escapeHtml(scene.label)}</b></span><em>${escapeHtml(stageLabels[stage])}</em></header>
+                <div class="tf-care-room"><span class="tf-care-window"><i></i><i></i></span><span class="tf-care-wall-mark">${escapeHtml(scene.symbol)}</span><span class="tf-care-couch"></span><span class="tf-care-character is-patient"><span class="tf-care-character-head">${patientPortrait}</span><span class="tf-care-character-body"><i></i><i></i></span><span class="tf-care-symptom">${escapeHtml(scene.symbol)}</span></span>${providerScene}<span class="tf-care-side-table"><i></i><b>${escapeHtml(scene.prop)}</b></span><span class="tf-care-caption">${escapeHtml(scene.note)}</span></div>
+                <footer><span class="tf-care-progress-label">${progressLabel}</span><span class="tf-care-progress"><i style="width:${progress}%"></i></span><b>${progress}%</b></footer>
+            </div>
+            <div class="tf-health-case-copy"><header><div><span>${escapeHtml(severityLabels[item.severity] || item.severity)}</span><h3>${escapeHtml(item.subject)} · ${escapeHtml(item.name)}</h3><p>${escapeHtml(item.symptoms)}</p></div></header><div class="tf-health-steps">${stages.map((name, index) => `<span class="${index <= currentIndex ? 'is-done' : ''} ${index === currentIndex ? 'is-current' : ''}"><i></i><b>${stepLabels[name]}</b></span>`).join('')}</div>${item.provider ? `<div class="tf-health-provider">${icon('heart')}<div><small>正在提供帮助</small><b>${escapeHtml(item.provider)}</b>${item.careNote ? `<p>${escapeHtml(item.careNote)}</p>` : ''}</div>${providerNpc ? `<button class="tf-secondary-button" data-action="open-npc" data-npc-id="${escapeHtml(providerNpc.id)}">查看角色</button>` : ''}</div>` : `<p class="tf-health-story">${escapeHtml(item.storyEffect || '可以先观察，也可以寻找帮助。')}</p>`}<footer>${stageAction(item)}<button class="tf-danger-text" data-action="delete-world-item" data-kind="health">删除记录</button></footer></div>
+        </article>`;
+    }).join('');
+    return `<section class="tf-health-app tf-health-app-v3"><header class="tf-card tf-health-hero"><div><small>LOCAL WELLNESS SERVICE</small><h2>健康与医疗</h2><p>用角色化的小场景记录发现、问诊、处理与恢复；事件与动画均可在本地运行。</p></div><div class="tf-health-start"><select id="tf-health-subject"><option value="">${escapeHtml(getMyDisplayName())}</option>${roles.map(npc => `<option value="${escapeHtml(npc.id)}">${escapeHtml(npc.name)}</option>`).join('')}</select><button class="tf-primary-button" data-action="create-local-health">触发一个日常事件</button><small>本地生成 · 不调用 API</small></div></header><div class="tf-health-list">${cards || `<div class="tf-card tf-empty tf-health-empty"><div class="tf-empty-icon">${icon('heart')}</div><div><h3>今天没有身体事件</h3><p>需要时可以本地触发；不依赖正文，也不会自动调用模型。</p></div></div>`}</div>${active.length ? '<p class="tf-fictional-care-note">仅用于虚构故事互动，不提供现实医疗判断。</p>' : ''}</section>`;
+}
+
+function renderWorldFeaturePage(data, moduleId) {
+    const definition = getModuleDefinition(moduleId);
+    if (!definition || moduleId === 'forum' || !getSettings().modules[moduleId]?.enabled) {
+        viewState.worldPage = '';
+        return renderServicesHub(data);
+    }
+    const content = moduleId === 'tasks' ? renderTaskApp(data)
+        : moduleId === 'fortune' ? renderFortuneAppV2(data)
+            : moduleId === 'travel' ? renderCompanionAppV4(data)
+                : moduleId === 'inventory' ? renderInventoryApp(data)
+                    : moduleId === 'health' ? renderHealthAppV3(data)
+                        : renderModeration(data, true);
+    const apiButton = moduleId === 'fortune' && data.world.fortune
+        ? `<button class="tf-secondary-button tf-fortune-revoke" data-action="revoke-local-fortune">${icon('repost')}撤销今日运势</button>`
+        : ['tasks', 'inventory'].includes(moduleId) || (moduleId === 'travel' && data.world.companion.status === 'away')
+            ? `<button class="tf-secondary-button" data-action="refresh-world-module" data-module-id="${escapeHtml(moduleId)}" ${viewState.moduleBusy.has(moduleId) ? 'disabled' : ''}>${viewState.moduleBusy.has(moduleId) ? '<span class="tf-spinner"></span>' : icon('sparkles')}明确生成</button>` : '';
+    return `<section class="tf-world-app-page"><header class="tf-world-app-header"><button class="tf-back-button" data-action="back-world-home">${icon('chevron')}服务</button><div><h1>${escapeHtml(definition.name)}</h1><p>${escapeHtml(definition.description)}</p></div>${apiButton}</header>${content}</section>`;
+}
+
+function renderWorldModules(data) {
+    const settings = getSettings();
+    const linked = WORLD_MODULE_DEFINITIONS.filter(definition => definition.id !== 'forum' && settings.modules[definition.id].enabled && settings.modules[definition.id].generationMode === 'linked');
+    return `<section class="tf-section-page tf-modules-page"><header><div><h2>世界功能</h2><p>这里决定功能是否存在、如何生成及是否允许正文读取；内容会出现在私信、通知、个人页和角色主页的自然位置。</p></div><button class="tf-primary-button" data-action="generate-posts" ${viewState.busy || !settings.modules.forum.enabled ? 'disabled' : ''}>${viewState.busy ? '<span class="tf-spinner"></span>' : icon('refresh')}刷新论坛</button></header><section class="tf-card tf-orchestrator-card"><header><div><h3>持续联动</h3><p>${linked.length ? `每次论坛刷新都会同时处理：${linked.map(item => item.name).join('、')}；合并为一次文本 API 调用。` : '当前没有其他功能参与论坛刷新。'}</p></div>${renderSwitch({ checked: settings.orchestration.enabled, action: 'toggle-orchestrator', label: '启用联动' })}</header><div class="tf-form-grid"><label><span>联动 API</span><select data-orchestration-field="apiProfileId">${renderModuleApiOptions(settings.orchestration.apiProfileId)}</select></label><label><span>联动总 RPM 上限</span><input type="number" min="0" max="600" data-orchestration-field="rpm" value="${Number(settings.orchestration.rpm || 0)}" placeholder="0=不限"></label><div>${renderSwitch({ checked: settings.orchestration.worldTimeEnabled, action: 'toggle-world-time', label: '提供世界时间' })}</div><label><span>世界时间（可留空自动）</span><input data-orchestration-field="worldTimeLabel" value="${escapeHtml(settings.orchestration.worldTimeLabel)}" placeholder="例如：雨季第三周的夜晚"></label></div></section><div class="tf-module-grid">${WORLD_MODULE_DEFINITIONS.map(renderModuleCard).join('')}</div></section>`;
+}
+
+function renderModeration(data, appMode = false) {
+    const settings = getSettings();
+    const world = data.world;
+    const pendingReports = world.reports.filter(report => ['pending', 'reviewing'].includes(report.status));
+    const pendingProposals = world.proposals.filter(proposal => proposal.moduleId === 'moderation' && proposal.status === 'pending');
+    const roleOptions = selected => settings.moderation.permissionLevels.map(level => `<option value="${escapeHtml(level.id)}" ${selected === level.id ? 'selected' : ''}>${escapeHtml(level.name)} · 等级 ${Number(level.level)}</option>`).join('');
+    const capabilityText = level => [['deletePost', '删帖'], ['adjudicateReport', '审理'], ['pinPost', '置顶'], ['issueTask', '发任务']].filter(([field]) => level?.[field]).map(([, label]) => label).join('、') || '普通成员权限';
+    const assignments = `<section class="tf-card tf-settings-card tf-permission-assignments"><header><div><h3>成员权限</h3><p>直接选择一个论坛角色，再赋予身份。权限不会因为角色重新生成人设而消失。</p></div><span>${data.npcs.length} 位成员</span></header><div>${data.npcs.length ? [...data.npcs].sort((a, b) => Number(b.systemRole) - Number(a.systemRole) || a.name.localeCompare(b.name, 'zh-CN')).map(npc => { const level = getPermissionLevel(settings, npc.permissionRole); return `<article data-npc-id="${escapeHtml(npc.id)}">${renderAvatar(npc.name, { avatarUrl: npc.avatarUrl, avatarKey: npc.avatarKey })}<div><b>${escapeHtml(npc.name)}${npc.systemRole ? '<small>当前 Char</small>' : ''}</b><span>@${escapeHtml(npc.handle)}</span><small>${escapeHtml(capabilityText(level))}</small></div><select data-npc-permission-role aria-label="赋予角色权限">${roleOptions(npc.permissionRole)}</select></article>`; }).join('') : '<p class="tf-empty-mini">还没有可以赋权的论坛角色</p>'}</div></section>`;
+    const systemAdmin = `<section class="tf-card tf-settings-card tf-system-admin-card ${settings.moderation.systemAdminEnabled ? 'is-enabled' : ''}"><header><span class="tf-system-admin-avatar">AI</span><div><h3>系统 AI 管理员 · ${escapeHtml(settings.moderation.systemAdminName)}</h3><p>只在审理举报时调用治理模块 API；默认关闭，且仍服从“由我确认 / 自动执行”的权限。</p></div>${renderSwitch({ checked: settings.moderation.systemAdminEnabled, action: 'toggle-system-ai-admin', label: '' })}</header><div class="tf-system-admin-options">${renderSwitch({ checked: settings.moderation.npcReportsEnabled, action: 'toggle-npc-reports', label: '允许 NPC 举报帖子' })}<small>NPC 举报复用论坛原本的一次生成，不额外调用 API；没有举报动机时不会创建记录。</small></div></section>`;
+    const heading = appMode ? systemAdmin : `<header><div><h2>社区治理</h2><p>社区规则、成员权限、举报与 AI 裁决都集中在这里。法条由你自行填写。</p></div></header>${systemAdmin}`;
+    return `<section class="tf-section-page tf-moderation-page">${heading}<section class="tf-card tf-settings-card"><header><div><h3>社区规则</h3><p>AI 管理员只按这里的规则判断，不会擅自引用现实法律。</p></div></header><textarea rows="8" data-moderation-rules>${escapeHtml(settings.moderation.communityRules)}</textarea></section>${assignments}<section class="tf-card tf-settings-card"><header><div><h3>权限层级</h3><p>角色获得某个身份后，只能使用该层级允许的操作。</p></div></header><div class="tf-permission-levels">${settings.moderation.permissionLevels.map(level => `<article data-permission-id="${escapeHtml(level.id)}"><label><span>名称</span><input data-permission-field="name" value="${escapeHtml(level.name)}"></label><label><span>等级</span><input type="number" data-permission-field="level" value="${Number(level.level)}"></label><div>${[['deletePost','删帖'],['adjudicateReport','审理举报'],['pinPost','置顶'],['issueTask','发布任务']].map(([field, label]) => `<label><input type="checkbox" data-permission-capability="${field}" ${level[field] ? 'checked' : ''}>${label}</label>`).join('')}</div></article>`).join('')}</div></section><section class="tf-card tf-settings-card"><header><div><h3>待处理举报</h3><p>用户举报不会立刻删帖；是否自动执行取决于模块的自动化权限。</p></div><span>${pendingReports.length}</span></header><div class="tf-report-list">${world.reports.length ? [...world.reports].reverse().map(report => { const post = data.posts.find(item => item.id === report.postId); return `<article data-report-id="${escapeHtml(report.id)}"><div><b>${escapeHtml(post ? `@${post.handle}：${post.content.slice(0, 80)}` : '原帖已不存在')}</b><p>${escapeHtml(report.reason)}</p><small>${escapeHtml(report.status)}${report.decision ? ` · ${escapeHtml(report.decision)}` : ''}</small></div><footer>${report.status === 'pending' ? `<button data-action="ai-review-report">AI 管理员审理</button><button data-action="dismiss-report">驳回</button><button class="tf-danger-text" data-action="manual-remove-report-post">隐藏帖子</button>` : ''}</footer></article>`; }).join('') : '<p class="tf-empty-mini">暂时没有举报</p>'}</div></section>${pendingProposals.length ? `<section class="tf-card tf-settings-card"><header><div><h3>等待确认的管理操作</h3><p>“先确认”模式下，AI 只提出建议，不会直接执行。</p></div></header><div class="tf-proposal-list">${pendingProposals.map(proposal => `<article data-proposal-id="${escapeHtml(proposal.id)}"><div><b>${escapeHtml(proposal.title)}</b><p>${escapeHtml(proposal.description)}</p></div><footer><button data-action="resolve-proposal" data-accepted="true">执行</button><button data-action="resolve-proposal" data-accepted="false">拒绝</button></footer></article>`).join('')}</div></section>` : ''}</section>`;
 }
 
 function renderApiParameterRows(profile) {
@@ -806,12 +1383,20 @@ function renderSourcesSettings() {
     const settings = getSettings();
     const tokens = viewState.injectionTokens;
     const overBudget = tokens.total > Number(settings.injection.tokenBudget || 2000);
-    return `<section class="tf-section-page"><header><div><h2>内容与注入</h2><p>控制微坛读取什么，以及哪些内容进入主聊天。</p></div></header>
-        <section class="tf-card tf-settings-card"><header><div><h3>酒馆资料读取</h3><p>正文、User、Char、世界书和酒馆预设完全独立，默认不读取酒馆预设。</p></div></header><div class="tf-form-grid"><div>${renderSwitch({ checked: settings.sources.chat, action: 'toggle-source-chat', label: '读取酒馆正文' })}</div><div>${renderSwitch({ checked: settings.sources.userPersona, action: 'toggle-source-user', label: '读取 User 人设' })}</div><div>${renderSwitch({ checked: settings.sources.characterPersona, action: 'toggle-source-character', label: '读取 Char 人设' })}</div><div>${renderSwitch({ checked: settings.sources.worldInfo, action: 'toggle-source-world', label: '读取世界书' })}</div><div>${renderSwitch({ checked: settings.sources.sillyTavernPreset, action: 'toggle-source-preset', label: '读取酒馆当前预设' })}</div><div>${renderSwitch({ checked: settings.generation.autoRefreshOnMessage, action: 'toggle-auto-refresh', label: '酒馆正文生成后自动更新论坛' })}<small class="tf-setting-hint">收到新的 Char 正文后自动生成一轮动态；开场白不会触发。</small></div><label><span>最近消息数</span><input type="number" data-setting="generation.contextMessages" value="${Number(settings.generation.contextMessages)}" min="1" max="200"></label></div>
+    const injectionSection = `<section class="tf-card tf-settings-card" data-settings-block="chat-injection">
+        <header><div><h3>注入主聊天 <span class="tf-direction-tag">论坛 → 正文</span></h3><p>这是“主聊天读取论坛内容”的统一入口。每篇帖子仍需在右上角“三个点”中单独选择；世界模块在“世界模块”页单独控制。</p></div></header>
+        <div class="tf-token-meter ${overBudget ? 'is-over' : ''}"><div><span>当前实际注入</span><b data-injection-token-total>${tokens.loading ? '计算中…' : `${numberLabel(tokens.total)} Tokens`}</b><small data-injection-token-parts>帖子 ${numberLabel(tokens.forum)} · 角色人设 ${numberLabel(tokens.roles)} · 世界模块 ${numberLabel(tokens.world)}</small></div><progress max="${Number(settings.injection.tokenBudget || 2000)}" value="${Math.min(tokens.total, Number(settings.injection.tokenBudget || 2000))}"></progress>${overBudget ? '<strong>已超过提醒预算，请减少注入帖子、评论、角色人设或世界模块。</strong>' : ''}</div>
+        <div class="tf-form-grid"><div>${renderSwitch({ checked: settings.injection.enabled, action: 'toggle-master-injection', label: '允许选中的帖子进入正文' })}</div><div>${renderSwitch({ checked: settings.injection.includeComments, action: 'toggle-include-comments', label: '帖子评论也进入正文' })}</div><div>${renderSwitch({ checked: settings.injection.npcEnabled, action: 'toggle-npc-master-injection', label: '角色人设也可进入正文' })}</div><label><span>Token 提醒预算</span><input type="number" data-setting="injection.tokenBudget" value="${Number(settings.injection.tokenBudget || 2000)}" min="100" max="100000"></label><label><span>注入深度</span><input type="number" data-setting="injection.depth" value="${Number(settings.injection.depth)}" min="0" max="10000"></label><label><span>最多注入帖子</span><input type="number" data-setting="injection.maxPosts" value="${Number(settings.injection.maxPosts)}" min="1" max="50"></label></div>
+    </section>`;
+    const sourceSection = `<section class="tf-card tf-settings-card">
+        <header><div><h3>论坛生成素材 <span class="tf-direction-tag">正文 → 论坛</span></h3><p>决定生成论坛内容时能参考哪些酒馆资料；这里的开关不会把论坛内容注入主聊天。</p></div></header>
+        <div class="tf-form-grid"><div>${renderSwitch({ checked: settings.sources.chat, action: 'toggle-source-chat', label: '把最近正文作为论坛生成素材' })}</div><div>${renderSwitch({ checked: settings.sources.userPersona, action: 'toggle-source-user', label: '读取 User 人设' })}</div><div>${renderSwitch({ checked: settings.sources.characterPersona, action: 'toggle-source-character', label: '读取 Char 人设' })}</div><div>${renderSwitch({ checked: settings.sources.worldInfo, action: 'toggle-source-world', label: '读取世界书' })}</div><div>${renderSwitch({ checked: settings.sources.sillyTavernPreset, action: 'toggle-source-preset', label: '读取酒馆当前预设' })}</div><div>${renderSwitch({ checked: settings.generation.autoRefreshOnMessage, action: 'toggle-auto-refresh', label: 'Char 新回复后自动刷新论坛' })}<small class="tf-setting-hint">收到新的 Char 正文后自动生成一轮动态；开场白不会触发。</small></div><label><span>最近消息数</span><input type="number" data-setting="generation.contextMessages" value="${Number(settings.generation.contextMessages)}" min="1" max="200"></label></div>
         <div class="tf-generation-ranges"><div><b>每轮帖子数量</b><label>最少<input type="number" data-setting="generation.postsMin" value="${Number(settings.generation.postsMin)}" min="1" max="10"></label><label>最多<input type="number" data-setting="generation.postsMax" value="${Number(settings.generation.postsMax)}" min="1" max="10"></label></div><div><b>每篇初始评论</b><label>最少<input type="number" data-setting="generation.commentsMin" value="${Number(settings.generation.commentsMin)}" min="0" max="8"></label><label>最多<input type="number" data-setting="generation.commentsMax" value="${Number(settings.generation.commentsMax)}" min="0" max="8"></label></div><div><b>回帖后的 AI 跟帖</b><label>最少<input type="number" data-setting="generation.repliesMin" value="${Number(settings.generation.repliesMin)}" min="1" max="8"></label><label>最多<input type="number" data-setting="generation.repliesMax" value="${Number(settings.generation.repliesMax)}" min="1" max="8"></label></div></div>
-        <div class="tf-world-head"><b>酒馆预设逐条选择（只读副本）</b><small>这里的开关不会修改酒馆预设原条目</small></div>${renderSillyTavernPresetCatalog(settings)}<div class="tf-world-head"><b>世界书逐条选择</b><button class="tf-secondary-button" data-action="refresh-world-info">刷新</button></div>${renderWorldInfoCatalog(settings)}</section>
-        <section class="tf-card tf-settings-card"><header><div><h3>注入主聊天</h3><p>每篇帖子可在右上角“三个点”中单独选择。</p></div></header><div class="tf-token-meter ${overBudget ? 'is-over' : ''}"><div><span>当前实际注入</span><b data-injection-token-total>${tokens.loading ? '计算中…' : `${numberLabel(tokens.total)} Tokens`}</b><small data-injection-token-parts>帖子 ${numberLabel(tokens.forum)} · 角色人设 ${numberLabel(tokens.roles)}</small></div><progress max="${Number(settings.injection.tokenBudget || 2000)}" value="${Math.min(tokens.total, Number(settings.injection.tokenBudget || 2000))}"></progress>${overBudget ? '<strong>已超过提醒预算，请减少注入帖子、评论或角色人设。</strong>' : ''}</div><div class="tf-form-grid"><div>${renderSwitch({ checked: settings.injection.enabled, action: 'toggle-master-injection', label: '启用帖子注入' })}</div><div>${renderSwitch({ checked: settings.injection.includeComments, action: 'toggle-include-comments', label: '连同评论注入' })}</div><div>${renderSwitch({ checked: settings.injection.npcEnabled, action: 'toggle-npc-master-injection', label: '启用角色人设注入' })}</div><label><span>Token 提醒预算</span><input type="number" data-setting="injection.tokenBudget" value="${Number(settings.injection.tokenBudget || 2000)}" min="100" max="100000"></label><label><span>注入深度</span><input type="number" data-setting="injection.depth" value="${Number(settings.injection.depth)}" min="0" max="10000"></label><label><span>最多注入帖子</span><input type="number" data-setting="injection.maxPosts" value="${Number(settings.injection.maxPosts)}" min="1" max="50"></label></div></section>
-        <section class="tf-card tf-settings-card"><header><div><h3>自动清理</h3><p>收藏帖始终保留。</p></div></header><div class="tf-form-grid"><div>${renderSwitch({ checked: settings.retention.autoCleanup, action: 'toggle-auto-cleanup', label: '启用自动清理' })}</div><label><span>帖子数量上限</span><input type="number" data-setting="retention.maxPosts" value="${Number(settings.retention.maxPosts)}" min="1" max="5000"></label></div><footer><button class="tf-secondary-button" data-action="cleanup-now">立即清理</button></footer></section></section>`;
+        <div class="tf-world-head"><b>酒馆预设逐条选择（只读副本）</b><small>这里的开关不会修改酒馆预设原条目</small></div>${renderSillyTavernPresetCatalog(settings)}
+        <div class="tf-world-head"><b>世界书逐条选择</b><button class="tf-secondary-button" data-action="refresh-world-info">刷新</button></div>${renderWorldInfoCatalog(settings)}
+    </section>`;
+    const cleanupSection = `<section class="tf-card tf-settings-card"><header><div><h3>自动清理</h3><p>收藏帖始终保留。</p></div></header><div class="tf-form-grid"><div>${renderSwitch({ checked: settings.retention.autoCleanup, action: 'toggle-auto-cleanup', label: '启用自动清理' })}</div><label><span>帖子数量上限</span><input type="number" data-setting="retention.maxPosts" value="${Number(settings.retention.maxPosts)}" min="1" max="5000"></label></div><footer><button class="tf-secondary-button" data-action="cleanup-now">立即清理</button></footer></section>`;
+    return `<section class="tf-section-page"><header><div><h2>内容与正文联动</h2><p>分别管理两个相反方向：主聊天读取论坛内容，以及论坛生成读取酒馆资料。</p></div></header>${injectionSection}${sourceSection}${cleanupSection}</section>`;
 }
 
 function renderAppearanceSettingsLegacyOld() {
@@ -831,6 +1416,18 @@ function renderAppearanceSettingsLegacy(beforeCss = '') {
     </section>`;
 }
 
+function renderWindowThemeSettings(settings) {
+    const labels = {
+        home: ['首页', '论坛信息流与帖子'],
+        messages: ['消息', '私信与通知'],
+        me: ['“我”与普通设置', '个人主页及大部分设置页'],
+        profile: ['帖子与角色主页', '完整帖子、角色公开主页与角色编辑'],
+        modules: ['世界模块', '任务、运势、外出、背包和健康'],
+        moderation: ['社区治理', '规则、权限与举报后台'],
+    };
+    return `<section class="tf-card tf-settings-card tf-view-theme-settings"><header><div><h3>每个窗口独立外观</h3><p>每个窗口可以继承全局，也可以拥有自己的底色、卡片色、壁纸和 CSS。</p></div></header><div class="tf-view-theme-list">${Object.entries(labels).map(([id, [title, description]]) => { const theme = settings.appearance.viewThemes[id]; const preview = renderStoredImage({ url: theme.wallpaperUrl, imageKey: theme.wallpaperKey, alt: `${title}壁纸` }); return `<details data-view-theme-id="${escapeHtml(id)}"><summary><div><b>${escapeHtml(title)}</b><small>${escapeHtml(description)}</small></div><span>${theme.inherit ? '继承全局' : '独立外观'}</span></summary><div class="tf-view-theme-editor"><div>${renderSwitch({ checked: theme.inherit, action: 'toggle-view-theme-inherit', label: '继承全局外观', dataset: { viewId: id } })}</div><label><span>窗口底色</span><input type="color" data-view-theme-field="backgroundColor" value="${escapeHtml(theme.backgroundColor || settings.appearance.backgroundColor)}" ${theme.inherit ? 'disabled' : ''}></label><label><span>卡片底色</span><input type="color" data-view-theme-field="cardColor" value="${escapeHtml(theme.cardColor || settings.appearance.cardColor)}" ${theme.inherit ? 'disabled' : ''}></label><div class="tf-view-wallpaper-preview">${preview || '<span>没有独立壁纸</span>'}</div><label class="is-wide"><span>壁纸图床直链</span><input data-view-theme-field="wallpaperUrl" value="${escapeHtml(theme.wallpaperKey ? '' : theme.wallpaperUrl)}" placeholder="https://example.com/background.jpg" ${theme.inherit ? 'disabled' : ''}></label><div class="tf-image-source-row"><button class="tf-secondary-button" data-action="upload-view-wallpaper" data-view-id="${escapeHtml(id)}" ${theme.inherit ? 'disabled' : ''}>导入本地壁纸</button><button class="tf-danger-text" data-action="clear-view-wallpaper" data-view-id="${escapeHtml(id)}" ${theme.inherit ? 'disabled' : ''}>清除</button></div><label class="is-wide"><span>本窗口 CSS</span><textarea rows="6" data-view-theme-field="customCss" placeholder="#tavern-forum-root .tf-app[data-tf-view='${escapeHtml(id)}'] { ... }" ${theme.inherit ? 'disabled' : ''}>${escapeHtml(theme.customCss)}</textarea></label></div></details>`; }).join('')}</div></section>`;
+}
+
 function renderAppearanceSettings() {
     const settings = getSettings();
     const appearance = settings.appearance;
@@ -842,7 +1439,7 @@ function renderAppearanceSettings() {
     const launcherSection = `<section class="tf-card tf-settings-card tf-launcher-settings"><header><div><h3>悬浮入口</h3><p>可显示或关闭，也可以更换图片。关闭后仍可从酒馆扩展菜单打开论坛。</p></div>${renderSwitch({ checked: ui.floatingButton, action: 'toggle-floating-button', label: '显示悬浮入口' })}</header><div class="tf-launcher-settings-body"><div class="tf-launcher-preview">${launcherImage || icon('message')}</div><div><label><span>图片图床直链</span><input data-floating-button-image-url value="${escapeHtml(ui.floatingButtonImageKey ? '' : ui.floatingButtonImageUrl)}" placeholder="https://example.com/forum-icon.png"></label><div class="tf-image-source-row"><button class="tf-secondary-button" data-action="upload-floating-button-image">导入本地图片</button><button class="tf-danger-text" data-action="clear-floating-button-image">恢复默认图标</button><button class="tf-secondary-button" data-action="reset-floating-button-position">恢复默认位置</button></div><small>关闭设置页后，可直接拖动页面上的悬浮入口改变位置；手机端也支持触摸拖动。</small></div></div></section>`;
     const page = renderAppearanceSettingsLegacy(visualSection);
     const end = page.lastIndexOf('</section>');
-    const additions = launcherSection;
+    const additions = `${renderWindowThemeSettings(settings)}${launcherSection}`;
     return end === -1 ? `${page}${additions}` : `${page.slice(0, end)}${additions}${page.slice(end)}`;
 }
 
@@ -858,7 +1455,39 @@ function renderDataSettings() {
 
 function renderNotificationSettings() {
     const settings = getSettings().notifications;
-    return `<section class="tf-section-page"><header><div><h2>通知设置</h2><p>选择你希望在消息页收到哪些社交提醒。</p></div></header><section class="tf-card tf-settings-card"><header><div><h3>接收的消息类型</h3><p>关闭后只是不再产生该类新通知，不会删除旧通知。</p></div></header><div class="tf-notification-settings"><div>${renderSwitch({ checked: settings.reply, action: 'toggle-notification-reply', label: '别人回复了我的评论' })}<small>AI 角色跟帖回复你的评论时提醒。</small></div><div>${renderSwitch({ checked: settings.mention, action: 'toggle-notification-mention', label: '@提及了我' })}<small>帖子或评论中提及你的账号时提醒。</small></div><div>${renderSwitch({ checked: settings.like, action: 'toggle-notification-like', label: '赞了我的内容' })}<small>角色赞了你的帖子或评论时提醒。</small></div><div>${renderSwitch({ checked: settings.follow, action: 'toggle-notification-follow', label: '有人关注了我' })}<small>角色开始关注你的个人主页时提醒。</small></div><div>${renderSwitch({ checked: settings.mutual, action: 'toggle-notification-mutual', label: '成为互相关注' })}<small>你们双方都关注对方时提醒。</small></div><div>${renderSwitch({ checked: settings.system, action: 'toggle-notification-system', label: '系统通知' })}<small>数据迁移和功能状态等必要提醒。</small></div></div></section></section>`;
+    return `<section class="tf-section-page"><header><div><h2>通知设置</h2><p>生成成功只在插件内部提示，不再调用酒馆通知。</p></div></header><section class="tf-card tf-settings-card"><header><div><h3>接收的消息类型</h3><p>关闭后只是不再产生该类新通知，不会删除旧通知。</p></div></header><div class="tf-notification-settings"><div>${renderSwitch({ checked: settings.reply, action: 'toggle-notification-reply', label: '别人回复了我的评论' })}</div><div>${renderSwitch({ checked: settings.mention, action: 'toggle-notification-mention', label: '@提及了我' })}</div><div>${renderSwitch({ checked: settings.like, action: 'toggle-notification-like', label: '赞了我的内容' })}</div><div>${renderSwitch({ checked: settings.follow, action: 'toggle-notification-follow', label: '有人关注了我' })}</div><div>${renderSwitch({ checked: settings.mutual, action: 'toggle-notification-mutual', label: '成为互相关注' })}</div><div>${renderSwitch({ checked: settings.tasks, action: 'toggle-notification-tasks', label: '任务与委托' })}</div><div>${renderSwitch({ checked: settings.companion, action: 'toggle-notification-companion', label: '旅伴归来与寄信' })}</div><div>${renderSwitch({ checked: settings.health, action: 'toggle-notification-health', label: '角色状态变化' })}</div><div>${renderSwitch({ checked: settings.moderation, action: 'toggle-notification-moderation', label: '举报与裁决' })}</div><div>${renderSwitch({ checked: settings.system, action: 'toggle-notification-system', label: '插件内部状态' })}</div></div></section></section>`;
+}
+
+function renderAutomationSettings() {
+    const settings = getSettings();
+    const quiet = settings.automation.quietHours;
+    const proactive = settings.social.proactiveDms;
+    const forbidden = settings.automation.forbiddenEvents;
+    const ban = (field, label, description) => `<div>${renderSwitch({ checked: forbidden[field], action: `toggle-forbidden-${field}`, label })}<small>${description}</small></div>`;
+    return `<section class="tf-section-page"><header><div><h2>自动化与剧情安全</h2><p>这些限制在本地判断；禁区不会在发生前询问，而是直接让对应事件概率为零。</p></div></header>
+        <section class="tf-card tf-settings-card"><header><div><h3>主动私信</h3><p>开启后，角色可随论坛刷新自然地发来私信；不会额外调用第二次 API。</p></div>${renderSwitch({ checked: proactive.enabled, action: 'toggle-proactive-dms', label: '允许角色主动私信' })}</header><div class="tf-form-grid"><div>${renderSwitch({ checked: proactive.withForumRefresh, action: 'toggle-proactive-with-forum', label: '跟随每次论坛刷新' })}</div><div>${renderSwitch({ checked: proactive.withAutomaticRefresh, action: 'toggle-proactive-with-auto', label: '跟随正文自动刷新' })}</div><div>${renderSwitch({ checked: proactive.requireFollow, action: 'toggle-proactive-require-follow', label: '仅允许已关注我的角色' })}</div><label><span>每轮最多主动私信</span><input type="number" min="0" max="8" data-setting="social.proactiveDms.maxPerRun" value="${Number(proactive.maxPerRun)}"></label></div></section>
+        <section class="tf-card tf-settings-card"><header><div><h3>安静时段</h3><p>手动刷新和你主动点击的 AI 回复不受影响。</p></div>${renderSwitch({ checked: quiet.enabled, action: 'toggle-quiet-hours', label: '启用安静时段' })}</header><div class="tf-form-grid"><label><span>开始</span><input type="time" data-setting="automation.quietHours.start" value="${escapeHtml(quiet.start)}"></label><label><span>结束</span><input type="time" data-setting="automation.quietHours.end" value="${escapeHtml(quiet.end)}"></label><label><span>安静方式</span><select data-setting="automation.quietHours.behavior"><option value="postpone" ${quiet.behavior === 'postpone' ? 'selected' : ''}>顺延主动生成，不调用 API</option><option value="mute" ${quiet.behavior === 'mute' ? 'selected' : ''}>仍生成，只静默保存通知</option></select></label></div></section>
+        <section class="tf-card tf-settings-card"><header><div><h3>剧情强度</h3><p>限制连续出现重病、破产、骗局等高强度事件。</p></div></header><div class="tf-form-grid"><label><span>整体强度</span><select data-setting="automation.narrativeIntensity"><option value="gentle" ${settings.automation.narrativeIntensity === 'gentle' ? 'selected' : ''}>温和</option><option value="balanced" ${settings.automation.narrativeIntensity === 'balanced' ? 'selected' : ''}>平衡</option><option value="dramatic" ${settings.automation.narrativeIntensity === 'dramatic' ? 'selected' : ''}>戏剧化</option><option value="custom" ${settings.automation.narrativeIntensity === 'custom' ? 'selected' : ''}>自定义</option></select></label><label><span>每 10 轮最多重大事件</span><input type="number" min="0" max="10" data-setting="automation.maxSevereEventsPerTenRuns" value="${Number(settings.automation.maxSevereEventsPerTenRuns)}"></label><label><span>同类重大事件冷却（小时）</span><input type="number" min="0" max="720" data-setting="automation.severeCooldownHours" value="${Number(settings.automation.severeCooldownHours)}"></label></div><div class="tf-notification-settings tf-story-bans">${ban('permanentDeath', '禁止永久死亡', '开启后，模型输出中的死亡事件会在本地被丢弃。')}${ban('irreversibleInjury', '禁止不可逆伤残', '允许可恢复的小伤，不允许永久伤残。')}${ban('severeIllness', '禁止重病', '轻微不适与恢复事件仍可出现。')}${ban('bankruptcy', '禁止破产或无家可归', '普通经济波动仍可出现。')}${ban('scam', '禁止骗局', '神秘任务仍可出现，但不会是诈骗。')}${ban('permanentTaskFailure', '禁止永久任务失败', '失败必须保留补救或重新尝试的可能。')}</div></section>
+    </section>`;
+}
+
+const SETTINGS_SEARCH_INDEX = [
+    ['私信 主动私信 陌生人 角色之间', 'privacyRelations', '隐私与关系', '我 → 隐私与关系'],
+    ['私信 主动私信 安静时段 概率 剧情 禁区 死亡 重病 骗局', 'automation', '自动化与剧情安全', '我 → 自动化与安全'],
+    ['私信 通知 回复 关注 任务 旅伴 举报', 'notifications', '通知设置', '我 → 通知设置'],
+        ['世界书 预设 正文 user char 注入 token', 'sources', '正文联动', '设置中心 → 正文联动'],
+    ['世界书 信息边界 知道 秘密', 'boundaries', '信息边界', '我 → 信息边界'],
+    ['提示词 role 系统 用户 助手 论坛设定', 'prompts', '论坛设定', '我 → 论坛设定'],
+    ['内置提示词 私信 任务 运势 旅伴 健康', 'builtinPrompts', '内置提示词', '我 → 内置提示词'],
+    ['api rpm 参数 模型 生图', 'api', 'API', '我 → API'],
+    ['任务 运势 旅伴 背包 健康 联动 本地随机', 'modules', '世界功能', '我 → 世界功能'],
+    ['字体 颜色 css 壁纸 透明 毛玻璃', 'appearance', '外观', '我 → 外观'],
+];
+
+function renderSettingsSearch() {
+    const query = viewState.settingsSearch.trim().toLocaleLowerCase();
+    const results = SETTINGS_SEARCH_INDEX.filter(([keywords, , title, path]) => `${keywords} ${title} ${path}`.toLocaleLowerCase().includes(query));
+    return `<section class="tf-section-page tf-settings-search-page"><header><div><h2>设置搜索</h2><p>“${escapeHtml(viewState.settingsSearch)}”的相关配置</p></div><button class="tf-secondary-button" data-action="clear-settings-search">清除搜索</button></header><div>${results.length ? results.map(([, section, title, path]) => `<button class="tf-card" data-action="settings-search-result" data-section="${section}"><b>${escapeHtml(title)}</b><span>${escapeHtml(path)}</span>${icon('chevron')}</button>`).join('') : '<div class="tf-card tf-empty"><h3>没有找到相关设置</h3></div>'}</div></section>`;
 }
 
 function renderBoundarySettings(data) {
@@ -866,22 +1495,29 @@ function renderBoundarySettings(data) {
     const boundary = settings.informationBoundary;
     const visibilityOptions = selected => [['public', '公开：所有角色可知'], ['restricted', '指定角色可知'], ['private', '仅私信可使用'], ['forbidden', '任何生成都不可读']].map(([value, label]) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`).join('');
     const roleChecks = fact => `<div class="tf-boundary-roles">${data.npcs.map(npc => `<label><input type="checkbox" data-fact-known-role="${escapeHtml(fact.id)}" data-role-id="${escapeHtml(npc.id)}" ${(fact.knownBy || []).includes(npc.id) ? 'checked' : ''}>${escapeHtml(npc.name)}</label>`).join('') || '<small>暂无角色</small>'}</div>`;
-    const world = viewState.worldCatalog.length ? `<div class="tf-world-boundaries">${viewState.worldCatalog.map(book => `<details><summary>${escapeHtml(book.name)}</summary>${book.entries.map(entry => {
+    const activeWorldBooks = viewState.worldCatalog.filter(book => book.enabled && book.entries.some(entry => entry.selected));
+    const world = activeWorldBooks.length ? `<div class="tf-world-boundaries">${activeWorldBooks.map(book => `<details><summary><span>${escapeHtml(book.name)}${book.characterBound ? ' · 角色绑定' : ' · 手动添加'}</span><small>${book.entries.filter(entry => entry.selected).length} 条正在读取</small></summary>${book.entries.filter(entry => entry.selected).map(entry => {
         const policy = boundary.worldInfoEntries[entry.key] || { visibility: 'public', knownBy: [] };
         return `<div class="tf-world-boundary-row"><div><b>${escapeHtml(entry.title)}</b><small>${escapeHtml(entry.content.slice(0, 80))}</small></div><select data-world-boundary="${escapeHtml(entry.key)}">${visibilityOptions(policy.visibility)}</select><input data-world-boundary-roles="${escapeHtml(entry.key)}" value="${escapeHtml((policy.knownBy || []).map(id => data.npcs.find(npc => npc.id === id)?.handle || id).join(', '))}" placeholder="指定角色账号，逗号分隔"></div>`;
-    }).join('')}</details>`).join('')}</div>` : '<p class="tf-empty-mini">点击“读取世界书边界”后，可逐条设置公开范围。</p>';
-    return `<section class="tf-section-page"><header><div><h2>信息边界</h2><p>控制每条事实由谁知道；角色之间私信默认关闭且永不注入公共正文。</p></div><button class="tf-secondary-button" data-action="refresh-world-info">读取世界书边界</button></header><section class="tf-card tf-settings-card"><header><div><h3>总开关</h3><p>关闭信息边界只建议用于测试。</p></div></header><div class="tf-notification-settings"><div>${renderSwitch({ checked: boundary.enabled, action: 'toggle-information-boundary', label: '启用角色知识隔离' })}<small>公开生成只读取公开事实；私信按参与者过滤。</small></div><div>${renderSwitch({ checked: settings.social.roleDirectMessages, action: 'toggle-role-direct-messages', label: '允许角色之间私信' })}<small>开启后，用户可创建 A ↔ B 私密会话并决定下一位发言者。</small></div></div></section><section class="tf-card tf-settings-card"><header><div><h3>事实库</h3><p>把容易泄露的秘密或认知差异拆成单独事实。</p></div></header><div class="tf-boundary-add"><input id="tf-new-fact" placeholder="例如：A 已经知道钥匙藏在书房"><select id="tf-new-fact-visibility">${visibilityOptions('restricted')}</select><button class="tf-primary-button" data-action="add-fact">新增事实</button></div><div class="tf-fact-list">${data.facts.length ? data.facts.map(fact => `<article class="tf-fact" data-fact-id="${escapeHtml(fact.id)}"><textarea data-fact-content rows="2">${escapeHtml(fact.content)}</textarea><div><select data-fact-visibility>${visibilityOptions(fact.visibility)}</select>${renderSwitch({ checked: fact.publishable, action: 'toggle-fact-publishable', label: '允许公开发布' })}<button class="tf-icon-button" data-action="delete-fact" data-fact-id="${escapeHtml(fact.id)}">${icon('trash')}</button></div>${['restricted', 'private'].includes(fact.visibility) ? roleChecks(fact) : ''}</article>`).join('') : '<p class="tf-empty-mini">还没有手动事实。公开正文仍按原有读取开关工作。</p>'}</div></section><section class="tf-card tf-settings-card"><header><div><h3>世界书条目的知识边界</h3><p>“指定角色/仅私信”的角色用账号填写；未设置时默认公开。</p></div></header>${world}</section></section>`;
+        }).join('')}</details>`).join('')}</div>` : '<p class="tf-empty-mini">当前没有正在读取的世界书条目。请先在“正文联动”里打开角色绑定或手动添加的世界书。</p>';
+    return `<section class="tf-section-page"><header><div><h2>信息边界</h2><p>控制每条事实由谁知道；角色之间私信默认关闭且永不注入公共正文。</p></div><button class="tf-secondary-button" data-action="refresh-world-info">刷新正在读取的条目</button></header><section class="tf-card tf-settings-card"><header><div><h3>总开关</h3><p>关闭信息边界只建议用于测试。</p></div></header><div class="tf-notification-settings"><div>${renderSwitch({ checked: boundary.enabled, action: 'toggle-information-boundary', label: '启用角色知识隔离' })}<small>公开生成只读取公开事实；私信按参与者过滤。</small></div><div>${renderSwitch({ checked: settings.social.roleDirectMessages, action: 'toggle-role-direct-messages', label: '允许角色之间私信' })}<small>开启后，用户可创建 A ↔ B 私密会话并决定下一位发言者。</small></div></div></section><section class="tf-card tf-settings-card"><header><div><h3>事实库</h3><p>把容易泄露的秘密或认知差异拆成单独事实。</p></div></header><div class="tf-boundary-add"><input id="tf-new-fact" placeholder="例如：A 已经知道钥匙藏在书房"><select id="tf-new-fact-visibility">${visibilityOptions('restricted')}</select><button class="tf-primary-button" data-action="add-fact">新增事实</button></div><div class="tf-fact-list">${data.facts.length ? data.facts.map(fact => `<article class="tf-fact" data-fact-id="${escapeHtml(fact.id)}"><textarea data-fact-content rows="2">${escapeHtml(fact.content)}</textarea><div><select data-fact-visibility>${visibilityOptions(fact.visibility)}</select>${renderSwitch({ checked: fact.publishable, action: 'toggle-fact-publishable', label: '允许公开发布' })}<button class="tf-icon-button" data-action="delete-fact" data-fact-id="${escapeHtml(fact.id)}">${icon('trash')}</button></div>${['restricted', 'private'].includes(fact.visibility) ? roleChecks(fact) : ''}</article>`).join('') : '<p class="tf-empty-mini">还没有手动事实。公开正文仍按原有读取开关工作。</p>'}</div></section><section class="tf-card tf-settings-card"><header><div><h3>正在读取的世界书知识边界</h3><p>只显示角色绑定或你手动添加、且条目开关已打开的世界书。</p></div></header>${world}</section></section>`;
 }
 
 function renderMe(data) {
     const section = getSettings().ui.meSection || 'overview';
+    const pages = { overview: () => renderMeOverview(data), profileEdit: renderProfileEditor, backpack: () => renderInventoryApp(data), favorites: () => renderFavorites(data), memory: () => renderRoleMemoryPage(data), privacyRelations: () => renderPrivacyRelations(data) };
+    return `<div class="tf-profile-page-shell">${(pages[section] || pages.overview)()}</div>`;
+}
+
+function renderSettings(data) {
+    const section = getSettings().ui.meSection || 'modules';
     const pages = {
-        overview: () => renderMeOverview(data), favorites: () => renderFavorites(data), npcs: () => renderNpcs(data),
-        memory: () => renderRoleMemoryPage(data), privacyRelations: () => renderPrivacyRelations(data),
-        prompts: renderPrompts, api: renderApiSettings, sources: renderSourcesSettings,
+        npcs: () => renderNpcs(data),
+        modules: () => renderWorldModules(data), moderation: () => renderModeration(data), automation: renderAutomationSettings,
+        prompts: renderPrompts, builtinPrompts: renderBuiltinPrompts, api: renderApiSettings, sources: renderSourcesSettings,
         boundaries: () => renderBoundarySettings(data), appearance: renderAppearanceSettings, notifications: renderNotificationSettings, runtime: () => renderRuntimeBackend(data), data: renderDataSettings,
     };
-    return `<div class="tf-me-page">${renderMeNav()}<div class="tf-me-content">${(pages[section] || pages.overview)()}</div></div>`;
+    return `<div class="tf-me-page tf-settings-page">${renderMeNav()}<div class="tf-me-content ${viewState.settingsHighlight === section ? 'is-search-highlighted' : ''}">${viewState.settingsSearch.trim() ? renderSettingsSearch() : (pages[section] || pages.modules)()}</div></div>`;
 }
 
 function renderMain(data) {
@@ -892,15 +1528,18 @@ function renderMain(data) {
         viewState.publicNpcId = '';
     }
     const tab = getSettings().ui.activeTab;
+    if (tab === 'services' && viewState.worldPage) return renderWorldFeaturePage(data, viewState.worldPage);
+    if (tab === 'services') return renderServicesHub(data);
     if (tab === 'messages') return renderMessages(data);
     if (tab === 'me') return renderMe(data);
+    if (tab === 'settings') return renderSettings(data);
     return renderHome(data);
 }
 
 function renderMainNav() {
     const tab = getSettings().ui.activeTab;
     const unread = getForumData().notifications.filter(item => !item.read && !npcForId(item.actorNpcId)?.blocked).length;
-    return `<nav class="tf-main-nav"><button class="${tab === 'home' ? 'is-active' : ''}" data-action="switch-tab" data-tab="home">${icon('home')}<span>首页</span></button><button class="${tab === 'messages' ? 'is-active' : ''}" data-action="switch-tab" data-tab="messages">${icon('message')}<span>消息</span>${unread ? `<i class="tf-nav-badge">${unread > 99 ? '99+' : unread}</i>` : ''}</button><button class="${tab === 'me' ? 'is-active' : ''}" data-action="switch-tab" data-tab="me">${icon('user')}<span>我</span></button></nav>`;
+    return `<nav class="tf-main-nav"><button class="${tab === 'home' ? 'is-active' : ''}" data-action="switch-tab" data-tab="home">${icon('home')}<span>首页</span></button><button class="${tab === 'services' ? 'is-active' : ''}" data-action="switch-tab" data-tab="services">${icon('sparkles')}<span>服务</span></button><button class="${tab === 'messages' ? 'is-active' : ''}" data-action="switch-tab" data-tab="messages">${icon('message')}<span>消息</span>${unread ? `<i class="tf-nav-badge">${unread > 99 ? '99+' : unread}</i>` : ''}</button><button class="${tab === 'me' ? 'is-active' : ''}" data-action="switch-tab" data-tab="me">${icon('user')}<span>我</span></button></nav>`;
 }
 
 function renderShellLegacy() {
@@ -912,18 +1551,43 @@ function renderShellLegacy() {
         if (data.npcs.length !== before) void saveForumData(data, true);
     }
     const tab = settings.ui.activeTab;
-    const searchPlaceholder = tab === 'messages' ? '搜索联系人' : tab === 'home' ? '搜索帖子、用户或话题' : '搜索仅在首页和消息中显示';
-    return `<div class="tf-backdrop" data-action="close"></div><section class="tf-app" data-tf-version="5"><header class="tf-topbar"><button class="tf-brand" data-action="switch-tab" data-tab="home"><span class="tf-brand-mark">◎</span><b class="tf-brand-name">${escapeHtml(settings.appearance.forumName)}</b></button><label class="tf-search"><span>${icon('search')}</span><input class="tf-search-input" value="${escapeHtml(viewState.searchQuery)}" placeholder="${searchPlaceholder}" ${tab === 'me' ? 'disabled' : ''}></label>${renderMainNav()}<div class="tf-top-actions"><button class="tf-injection-dot ${settings.injection.enabled ? 'is-on' : ''}" data-action="go-injection-settings" title="${settings.injection.enabled ? '注入已开启' : '注入未开启'}" aria-label="注入状态"></button><button class="tf-close" data-action="close" title="关闭">${icon('close')}</button></div></header><main class="tf-view">${renderMain(data)}</main><div class="tf-mobile-main-nav">${renderMainNav()}</div><input id="tf-import-prompts-file" type="file" accept="application/json,.json" hidden><input id="tf-import-forum-file" type="file" accept="application/json,.json" hidden><input id="tf-import-css-file" type="file" accept="text/css,.css" hidden><input id="tf-import-profile-avatar-file" type="file" accept="image/*" hidden><input id="tf-import-profile-background-file" type="file" accept="image/*" hidden><input id="tf-import-avatar-library-file" type="file" accept="image/*" hidden><input id="tf-import-npc-avatar-file" type="file" accept="image/*" hidden></section>`;
+    const searchPlaceholder = tab === 'messages' ? '搜索联系人' : tab === 'settings' ? '搜索设置，例如“私信”' : tab === 'services' ? '搜索服务' : '搜索帖子、用户或话题';
+    const searchValue = tab === 'settings' ? viewState.settingsSearch : viewState.searchQuery;
+    return `<div class="tf-backdrop" data-action="close"></div><section class="tf-app" data-tf-version="5"><header class="tf-topbar"><button class="tf-brand" data-action="switch-tab" data-tab="home"><span class="tf-brand-mark">◎</span><b class="tf-brand-name">${escapeHtml(settings.appearance.forumName)}</b></button><label class="tf-search"><span>${icon('search')}</span><input class="tf-search-input" value="${escapeHtml(searchValue)}" placeholder="${searchPlaceholder}"></label>${renderMainNav()}<div class="tf-top-actions"><button class="tf-injection-dot ${settings.injection.enabled ? 'is-on' : ''}" data-action="go-injection-settings" title="${settings.injection.enabled ? '注入已开启' : '注入未开启'}" aria-label="注入状态"></button><button class="tf-icon-button tf-settings-entry" data-action="open-settings" data-section="modules" title="设置" aria-label="打开设置">${icon('settings')}</button><button class="tf-close" data-action="close" title="关闭">${icon('close')}</button></div></header><main class="tf-view">${renderMain(data)}</main><div class="tf-mobile-main-nav">${renderMainNav()}</div><input id="tf-import-prompts-file" type="file" accept="application/json,.json" hidden><input id="tf-import-forum-file" type="file" accept="application/json,.json" hidden><input id="tf-import-css-file" type="file" accept="text/css,.css" hidden><input id="tf-import-profile-avatar-file" type="file" accept="image/*" hidden><input id="tf-import-profile-background-file" type="file" accept="image/*" hidden><input id="tf-import-avatar-library-file" type="file" accept="image/*" hidden><input id="tf-import-npc-avatar-file" type="file" accept="image/*" hidden></section>`;
+}
+
+function getActiveAppearanceScope() {
+    if (viewState.selectedPostId || viewState.publicNpcId || viewState.selectedNpcId) return 'profile';
+    const settings = getSettings();
+    if (settings.ui.activeTab === 'messages') return 'messages';
+    if (settings.ui.activeTab === 'services') return 'modules';
+    if (settings.ui.activeTab === 'settings') return settings.ui.meSection === 'moderation' ? 'moderation' : 'modules';
+    if (settings.ui.activeTab === 'home') return 'home';
+    if (settings.ui.meSection === 'modules') return 'modules';
+    if (settings.ui.meSection === 'moderation') return 'moderation';
+    return 'me';
+}
+
+function getActiveAppearanceTheme() {
+    const settings = getSettings();
+    const scope = getActiveAppearanceScope();
+    const view = settings.appearance.viewThemes?.[scope];
+    return { scope, view, inherited: !view || view.inherit !== false };
 }
 
 function renderShell() {
     const settings = getSettings();
+    const theme = getActiveAppearanceTheme();
     const brandImage = renderStoredImage({ url: settings.appearance.brandIconUrl, imageKey: settings.appearance.brandIconKey, alt: `${settings.appearance.forumName} 图标`, className: 'tf-brand-icon-image' });
-    const wallpaper = renderStoredImage({ url: settings.appearance.wallpaperUrl, imageKey: settings.appearance.wallpaperKey, alt: '论坛壁纸', className: 'tf-wallpaper-image' });
-    const shell = renderShellLegacy()
+    const wallpaperSource = theme.inherited ? settings.appearance : theme.view;
+    const wallpaper = renderStoredImage({ url: wallpaperSource.wallpaperUrl, imageKey: wallpaperSource.wallpaperKey, alt: `${theme.scope} 窗口壁纸`, className: 'tf-wallpaper-image' });
+    let shell = renderShellLegacy()
         .replace('data-tf-version="5"', 'data-tf-version="7"')
-        .replace(/<span class="tf-brand-mark">.*?<\/span>/, `<span class="tf-brand-mark">${brandImage || '◎'}</span>`)
+        .replace('class="tf-app"', `class="tf-app" data-tf-view="${escapeHtml(theme.scope)}"`)
+        .replace(/<span class="tf-brand-mark">.*?<\/span>/, `<span class="tf-brand-mark"><i class="tf-brand-fallback" aria-hidden="true">◎</i>${brandImage}</span>`)
         .replace(/(<section class="tf-app"[^>]*>)/, `$1<div class="tf-wallpaper">${wallpaper}</div>`);
+    const closing = shell.lastIndexOf('</section>');
+    if (closing !== -1) shell = `${shell.slice(0, closing)}<div class="tf-in-app-toasts" aria-live="polite"></div>${shell.slice(closing)}`;
     return wallpaper ? shell.replace('class="tf-app"', 'class="tf-app has-wallpaper"') : shell;
 }
 
@@ -938,11 +1602,14 @@ function colorWithOpacity(color, opacity) {
 
 function applyAppearance() {
     const settings = getSettings();
+    const theme = getActiveAppearanceTheme();
+    const backgroundColor = theme.inherited || !theme.view.backgroundColor ? settings.appearance.backgroundColor : theme.view.backgroundColor;
+    const cardColor = theme.inherited || !theme.view.cardColor ? settings.appearance.cardColor : theme.view.cardColor;
     const root = getRoot();
     if (root) {
         root.style.setProperty('--tf-primary', settings.appearance.primaryColor);
-        root.style.setProperty('--tf-bg', settings.appearance.backgroundColor);
-        root.style.setProperty('--tf-card', settings.appearance.cardColor);
+        root.style.setProperty('--tf-bg', backgroundColor);
+        root.style.setProperty('--tf-card', cardColor);
         root.style.setProperty('--tf-text', settings.appearance.textColor);
         root.style.setProperty('--tf-font', settings.appearance.fontFamily ? settings.appearance.fontFamily : 'inherit');
         root.style.setProperty('--tf-top-nav-bg', settings.appearance.topNavColor);
@@ -961,7 +1628,9 @@ function applyAppearance() {
         custom.id = CUSTOM_STYLE_ID;
         document.head.append(custom);
     }
-    custom.textContent = settings.appearance.customCss || (settings.appearance.customCssCleared ? '' : BUILTIN_CUSTOM_CSS_TEMPLATE);
+    const baseCss = settings.appearance.customCss || (settings.appearance.customCssCleared ? '' : BUILTIN_CUSTOM_CSS_TEMPLATE);
+    const viewCss = theme.inherited ? '' : String(theme.view.customCss || '');
+    custom.textContent = `${baseCss}\n${viewCss}`;
 }
 
 function applySearchFilter() {
@@ -979,24 +1648,78 @@ function applySearchFilter() {
     if (label) label.textContent = String(visible);
 }
 
-function render() {
+function getRenderScrollKey() {
+    const settings = getSettings();
+    const tab = settings.ui.activeTab;
+    if (viewState.selectedPostId) return `${tab}:post:${viewState.selectedPostId}`;
+    if (viewState.publicNpcId) return `${tab}:public:${viewState.publicNpcId}`;
+    if (viewState.selectedNpcId) return `${tab}:role:${viewState.selectedNpcId}`;
+    if (tab === 'services') return `${tab}:${viewState.worldPage || 'hub'}`;
+    if (tab === 'messages') return `${tab}:${viewState.messageMode}:${viewState.selectedConversationId || 'list'}:${viewState.mobileDmChat ? 'chat' : 'split'}`;
+    if (tab === 'me' || tab === 'settings') return `${tab}:${settings.ui.meSection || 'overview'}`;
+    return tab;
+}
+
+function render({ preserveScroll = false } = {}) {
     const root = getRoot();
     if (!root) return;
+    const previousView = root.querySelector('.tf-view');
+    const previousScrollTop = Number(previousView?.scrollTop || 0);
+    const previousScrollLeft = Number(previousView?.scrollLeft || 0);
+    const previousStories = root.querySelector('.tf-stories');
+    if (previousStories) viewState.storiesScrollLeft = Number(previousStories.scrollLeft || 0);
+    const previousSettingsNav = root.querySelector('.tf-settings-page .tf-me-nav');
+    if (previousSettingsNav) viewState.settingsNavScrollLeft = Number(previousSettingsNav.scrollLeft || 0);
+    const nextScrollKey = getRenderScrollKey();
+    const previousScrollKey = viewState.renderedScrollKey;
+    if (previousScrollKey === 'home' && nextScrollKey.startsWith('home:post:')) viewState.homeScrollTop = previousScrollTop;
+    const returningHomeFromPost = previousScrollKey.startsWith('home:post:') && nextScrollKey === 'home';
+    const shouldPreserveScroll = preserveScroll || (Boolean(viewState.renderedScrollKey) && viewState.renderedScrollKey === nextScrollKey);
     root.innerHTML = renderShell();
+    viewState.renderedScrollKey = nextScrollKey;
+    if (!getSettings().moderation.systemAdminEnabled) root.querySelectorAll('[data-action="ai-review-report"]').forEach(button => { button.disabled = true; button.title = '请先开启系统 AI 管理员'; });
     if (!root.querySelector('#tf-import-npc-background-file')) root.insertAdjacentHTML('beforeend', '<input id="tf-import-npc-background-file" type="file" accept="image/*" hidden>');
     if (!root.querySelector('#tf-import-floating-button-file')) root.insertAdjacentHTML('beforeend', '<input id="tf-import-floating-button-file" type="file" accept="image/*" hidden>');
     if (!root.querySelector('#tf-import-brand-icon-file')) root.insertAdjacentHTML('beforeend', '<input id="tf-import-brand-icon-file" type="file" accept="image/*" hidden>');
     if (!root.querySelector('#tf-import-forum-wallpaper-file')) root.insertAdjacentHTML('beforeend', '<input id="tf-import-forum-wallpaper-file" type="file" accept="image/*" hidden>');
+    if (!root.querySelector('#tf-import-view-wallpaper-file')) root.insertAdjacentHTML('beforeend', '<input id="tf-import-view-wallpaper-file" type="file" accept="image/*" hidden>');
+    if (!root.querySelector('#tf-import-module-file')) root.insertAdjacentHTML('beforeend', '<input id="tf-import-module-file" type="file" accept="application/json,.json" hidden>');
     root.toggleAttribute('hidden', !viewState.open);
     document.body.classList.toggle('tf-modal-open', viewState.open);
     applyAppearance();
+    paintInAppToasts();
     applySearchFilter();
     updateLaunchers();
-    if (getSettings().ui.activeTab === 'me' && getSettings().ui.meSection === 'sources') void refreshInjectionTokenCount();
+    if (getSettings().ui.activeTab === 'settings' && ['sources', 'modules'].includes(getSettings().ui.meSection)) void refreshInjectionTokenCount();
     void hydrateImages();
-    queueMicrotask(() => {
+    const restoreScroll = () => {
+        const view = root.querySelector('.tf-view');
+        if (returningHomeFromPost && view && viewState.renderedScrollKey === nextScrollKey) {
+            view.scrollTop = viewState.homeScrollTop;
+            view.scrollLeft = 0;
+        } else if (shouldPreserveScroll && view && viewState.renderedScrollKey === nextScrollKey) {
+            view.scrollTop = previousScrollTop;
+            view.scrollLeft = previousScrollLeft;
+        }
+        const stories = root.querySelector('.tf-stories');
+        if (stories) stories.scrollLeft = viewState.storiesScrollLeft;
+        const settingsNav = root.querySelector('.tf-settings-page .tf-me-nav');
+        if (settingsNav) settingsNav.scrollLeft = viewState.settingsNavScrollLeft;
+        const settingsBlock = viewState.pendingSettingsBlock && root.querySelector(`[data-settings-block="${viewState.pendingSettingsBlock}"]`);
+        if (settingsBlock && view) {
+            const viewBox = view.getBoundingClientRect();
+            const blockBox = settingsBlock.getBoundingClientRect();
+            view.scrollTop += blockBox.top - viewBox.top - 18;
+        }
         const messages = root.querySelector('.tf-dm-messages');
-        if (messages) messages.scrollTop = messages.scrollHeight;
+        if (messages && !shouldPreserveScroll) messages.scrollTop = messages.scrollHeight;
+    };
+    queueMicrotask(() => {
+        restoreScroll();
+        requestAnimationFrame(() => {
+            restoreScroll();
+            viewState.pendingSettingsBlock = '';
+        });
     });
 }
 
@@ -1004,18 +1727,26 @@ async function refreshInjectionTokenCount() {
     if (viewState.injectionTokens.loading) return;
     viewState.injectionTokens.loading = true;
     try {
-        const { forumValue, npcValue } = syncInjection();
+        const settings = getSettings();
+        const data = getForumData();
+        const { forumValue, npcValue, worldValue } = syncInjection();
         const context = globalThis.SillyTavern?.getContext?.();
         const count = async value => {
             if (!value) return 0;
             if (typeof context?.getTokenCountAsync === 'function') return Number(await context.getTokenCountAsync(value) || 0);
             return Math.ceil(Array.from(value).reduce((sum, char) => sum + (/[^\x00-\xff]/.test(char) ? 1 : 0.28), 0));
         };
-        const [forum, roles, total] = await Promise.all([count(forumValue), count(npcValue), count([forumValue, npcValue].filter(Boolean).join('\n'))]);
-        viewState.injectionTokens = { total, forum, roles, loading: false };
+        const moduleValues = Object.fromEntries(WORLD_MODULE_DEFINITIONS.map(definition => [definition.id, definition.id === 'forum' ? forumValue : buildWorldModuleInjection(data, settings, definition.id)]));
+        const [forum, roles, world, total, moduleCounts] = await Promise.all([
+            count(forumValue), count(npcValue), count(worldValue), count([forumValue, npcValue, worldValue].filter(Boolean).join('\n')),
+            Promise.all(Object.entries(moduleValues).map(async ([id, value]) => [id, await count(value)])),
+        ]);
+        const modules = Object.fromEntries(moduleCounts);
+        viewState.injectionTokens = { total, forum, roles, world, modules, loading: false };
         const root = getRoot();
         root?.querySelector('[data-injection-token-total]')?.replaceChildren(`${numberLabel(total)} Tokens`);
-        root?.querySelector('[data-injection-token-parts]')?.replaceChildren(`帖子 ${numberLabel(forum)} · 角色人设 ${numberLabel(roles)}`);
+        root?.querySelector('[data-injection-token-parts]')?.replaceChildren(`帖子 ${numberLabel(forum)} · 角色人设 ${numberLabel(roles)} · 世界模块 ${numberLabel(world)}`);
+        for (const [id, value] of Object.entries(modules)) root?.querySelector(`[data-module-token="${id}"]`)?.replaceChildren(value ? `当前约 ${numberLabel(value)} Tokens` : '当前没有注入内容');
         const meter = root?.querySelector('.tf-token-meter');
         const budget = Number(getSettings().injection.tokenBudget || 2000);
         meter?.classList.toggle('is-over', total > budget);
@@ -1034,7 +1765,7 @@ async function hydrateImages() {
         const key = image.dataset.imageKey;
         try {
             const value = imageMemory.get(key) || await localforage.getItem(key);
-            if (!value) { image.closest('.tf-image-loading')?.remove(); continue; }
+            if (!value) { image.hidden = true; image.closest('.tf-image-loading')?.remove(); continue; }
             imageMemory.set(key, value);
             image.src = value;
             image.closest('.tf-image-loading')?.classList.add('is-loaded');
@@ -1045,10 +1776,16 @@ async function hydrateImages() {
 }
 
 function setActiveTab(tab) {
-    if (!['home', 'messages', 'me'].includes(tab)) tab = 'home';
-    getSettings().ui.activeTab = tab;
+    if (!['home', 'services', 'messages', 'me', 'settings'].includes(tab)) tab = 'home';
+    const settings = getSettings();
+    settings.ui.activeTab = tab;
+    // “我”是一个真正的个人主页入口。设置页可以从主页侧栏继续进入，
+    // 但不应因为上次停留位置而让用户误以为个人主页不存在。
+    if (tab === 'me') settings.ui.meSection = 'overview';
+    if (tab === 'settings' && ['overview', 'profileEdit', 'backpack', 'favorites', 'memory', 'privacyRelations'].includes(settings.ui.meSection)) settings.ui.meSection = 'modules';
     viewState.selectedPostId = '';
     viewState.publicNpcId = '';
+    viewState.worldPage = '';
     viewState.searchQuery = '';
     if (tab === 'messages') prepareConversations(getForumData());
     saveSettings();
@@ -1056,7 +1793,8 @@ function setActiveTab(tab) {
 }
 
 function setMeSection(section) {
-    getSettings().ui.activeTab = 'me';
+    const profileSections = ['overview', 'profileEdit', 'backpack', 'favorites', 'memory', 'privacyRelations'];
+    getSettings().ui.activeTab = profileSections.includes(section) ? 'me' : 'settings';
     getSettings().ui.meSection = section;
     viewState.selectedPostId = '';
     viewState.publicNpcId = '';
@@ -1092,7 +1830,7 @@ async function enforcePostRetention(data, force = false) {
 async function refreshWorldCatalog(showNotice = false) {
     if (viewState.worldLoading) return;
     viewState.worldLoading = true;
-    render();
+    render({ preserveScroll: true });
     try {
         viewState.worldCatalog = await getWorldInfoCatalog();
         if (showNotice) notify('success', `已读取 ${viewState.worldCatalog.reduce((sum, book) => sum + book.entries.length, 0)} 条世界书条目`);
@@ -1100,7 +1838,7 @@ async function refreshWorldCatalog(showNotice = false) {
         notify('error', `世界书读取失败：${error.message}`);
     } finally {
         viewState.worldLoading = false;
-        render();
+        render({ preserveScroll: true });
     }
 }
 
@@ -1118,10 +1856,90 @@ function addMentionNotifications(data, posts) {
     }
 }
 
+function addModuleNotification(data, type, content, options = {}) {
+    const preferences = getSettings().notifications;
+    if (preferences[type] === false) return null;
+    const item = createNotification({ type, category: type, content, ...options });
+    data.notifications.unshift(item);
+    return item;
+}
+
+function addConversationMessage(conversation, content, extra = {}) {
+    if (!conversation || !String(content || '').trim()) return null;
+    const message = {
+        id: createId('dm'), role: 'assistant', senderNpcId: extra.senderNpcId || '', senderName: extra.senderName || conversation.name,
+        content: String(content).trim(), private: false, createdAt: Date.now(), ...extra,
+    };
+    conversation.messages.push(message);
+    conversation.unread = Number(conversation.unread || 0) + 1;
+    conversation.updatedAt = Date.now();
+    return message;
+}
+
+function routeWorldUpdatesToApp(data, updates, before = {}) {
+    const routed = [];
+    for (const task of updates.tasks || []) {
+        const npc = data.npcs.find(item => item.id === task.issuerNpcId)
+            || data.npcs.find(item => item.name === task.issuer || String(item.handle || '').toLocaleLowerCase() === String(task.issuerHandle || task.issuer || '').replace(/^@/, '').toLocaleLowerCase());
+        const conversation = npc && isRoleLibraryMember(npc) ? ensureNpcConversation(data, npc) : null;
+        const content = `委托：${task.title}\n${task.description}${task.reward ? `\n可能奖励：${task.reward}` : ''}${task.failure ? `\n失败影响：${task.failure}` : ''}`;
+        if (conversation) addConversationMessage(conversation, content, { senderNpcId: npc.id, senderName: npc.name, kind: 'task', taskId: task.id });
+        addModuleNotification(data, 'tasks', `${task.issuer} 发来一份委托：${task.title}`, { actorNpcId: npc?.id || '', actorName: task.issuer, conversationId: conversation?.id || '', moduleId: 'tasks', itemId: task.id });
+        routed.push('委托消息');
+    }
+    if (updates.companion || (updates.travel || []).length) {
+        const conversation = ensureCompanionConversation(data);
+        const companion = data.world.companion;
+        const newest = (updates.travel || []).at(-1);
+        const content = companion.message || newest?.notes || `${companion.name}寄回了一条消息。`;
+        addConversationMessage(conversation, content, { kind: 'companion', tripId: newest?.id || '' });
+        const returnedItem = newest?.status === 'returned' && newest.souvenir ? `，${newest.souvenir}已进入背包` : '';
+        addModuleNotification(data, 'companion', `${companion.name}寄回了新消息${returnedItem}`, { actorName: companion.name, conversationId: conversation.id, moduleId: 'travel', itemId: newest?.id || '' });
+        routed.push('旅伴消息');
+    }
+    for (const item of updates.inventory || []) {
+        addModuleNotification(data, 'system', `背包获得：${item.name} ×${item.quantity}`, { actorName: '背包', moduleId: 'inventory', itemId: item.id });
+        routed.push('背包提醒');
+    }
+    for (const item of updates.health || []) {
+        const npc = data.npcs.find(role => role.id === item.subjectNpcId || role.name === item.subject);
+        addModuleNotification(data, 'health', `${item.subject} 的状态发生变化：${item.name}`, { actorNpcId: npc?.id || '', actorName: item.subject, moduleId: 'health', itemId: item.id });
+        routed.push('角色状态提醒');
+    }
+    if ((updates.moderationActions || []).length || (data.world.reports?.length || 0) > Number(before.reportCount || 0)) {
+        addModuleNotification(data, 'moderation', '社区管理有新的举报或裁决需要查看', { actorName: '社区管理', moduleId: 'moderation' });
+        routed.push('管理通知');
+    }
+    return [...new Set(routed)];
+}
+
+function routeProactiveDirectMessages(data, events) {
+    const settings = getSettings();
+    const routed = [];
+    for (const event of (events || []).slice(0, settings.social.proactiveDms.maxPerRun)) {
+        const key = event.targetHandle.replace(/^@/, '').toLocaleLowerCase();
+        const npc = data.npcs.find(item => String(item.handle || '').replace(/^@/, '').toLocaleLowerCase() === key);
+        if (!npc || !isRoleLibraryMember(npc) || npc.blocked || (settings.social.proactiveDms.requireFollow && !npc.followsUser)) continue;
+        const conversation = npc.systemRole ? ensureCharacterConversation(data, getChatSnapshot()) : ensureNpcConversation(data, npc);
+        const message = addConversationMessage(conversation, event.content, { senderNpcId: npc.id, senderName: npc.name, kind: 'proactive' });
+        if (!message) continue;
+        addModuleNotification(data, 'system', `${npc.name} 发来一条私信`, { actorNpcId: npc.id, actorName: npc.name, conversationId: conversation.id });
+        routed.push(npc.name);
+    }
+    return routed;
+}
+
 async function runGeneration({ automatic = false } = {}) {
     if (viewState.busy) return;
     if (!hasActiveChat()) {
         if (!automatic) notify('warning', '请先打开一个角色聊天');
+        return;
+    }
+    const initialSettings = getSettings();
+    const initialData = getForumData();
+    if (automatic && initialSettings.automation.quietHours.behavior === 'postpone' && isQuietHours(initialSettings)) {
+        setModuleDecision(initialData, 'forum', 'quiet-hours', '当前处于安静时段，自动刷新已顺延');
+        await saveForumData(initialData, true);
         return;
     }
     viewState.busy = true;
@@ -1133,9 +1951,43 @@ async function runGeneration({ automatic = false } = {}) {
     let generationComplete = false;
     try {
         const settings = getSettings();
+        if (!settings.modules.forum.enabled) throw new Error('论坛模块当前已关闭，请先在“我 → 世界模块”中开启');
         const data = getForumData();
-        const request = buildForumGenerationRequest({ ...getChatSnapshot(), settings, existingPosts: data.posts, sourceContext: await getGenerationSourceContext(), excludedRoles: data.npcs.filter(npc => npc.blocked) });
-        textConfig = getApiConfig('text');
+        const generationSettings = {
+            ...settings,
+            modules: Object.fromEntries(Object.entries(settings.modules).map(([id, value]) => [id, { ...value }])),
+            social: { ...settings.social, proactiveDms: { ...settings.social.proactiveDms } },
+        };
+        const linkedIds = [];
+        for (const definition of WORLD_MODULE_DEFINITIONS.filter(item => item.id !== 'forum')) {
+            const module = settings.modules[definition.id];
+            if (!module?.enabled || module.generationMode !== 'linked') continue;
+            const decision = evaluateModuleGeneration(settings, data, definition.id, { automatic });
+            setModuleDecision(data, definition.id, decision.code, decision.message);
+            if (decision.allowed) linkedIds.push(definition.id);
+            else generationSettings.modules[definition.id].generationMode = 'independent';
+        }
+        if (automatic && !settings.social.proactiveDms.withAutomaticRefresh) generationSettings.social.proactiveDms.enabled = false;
+        const localUpdates = {};
+        const fortuneModule = settings.modules.fortune;
+        if (fortuneModule?.enabled && fortuneModule.generationMode === 'local') {
+            const decision = evaluateModuleGeneration(settings, data, 'fortune', { automatic });
+            if (decision.allowed) {
+                const fortune = createLocalFortune(new Date(), `${data.topic}|${getChatSnapshot().characterId}`);
+                if (data.world.fortune?.date !== fortune.date || !data.world.fortune?.local) localUpdates.fortune = fortune;
+                setModuleDecision(data, 'fortune', 'local', localUpdates.fortune ? '已按世界日期生成本地运势，未调用 API' : '今日本地运势已存在，未重复生成', { generated: Boolean(localUpdates.fortune) });
+            } else setModuleDecision(data, 'fortune', decision.code, decision.message);
+        }
+        const npcReportCheck = settings.modules.moderation.enabled && settings.moderation.npcReportsEnabled;
+        const instructionSettings = settings.orchestration.enabled ? generationSettings : {
+            ...generationSettings,
+            modules: Object.fromEntries(Object.entries(generationSettings.modules || {}).map(([id, value]) => [id, { ...value, generationMode: 'independent', joinGeneration: false }])),
+        };
+        const linkedWorldInstruction = settings.orchestration.enabled || npcReportCheck
+            ? buildLinkedWorldInstruction({ settings: instructionSettings, data })
+            : '';
+        const request = buildForumGenerationRequest({ ...getChatSnapshot(), settings, existingPosts: data.posts, sourceContext: await getGenerationSourceContext(), excludedRoles: data.npcs.filter(npc => npc.blocked), linkedWorldInstruction });
+        textConfig = getModuleApiConfig('forum', 'text', { orchestrated: settings.orchestration.enabled && Boolean(linkedWorldInstruction) });
         result = await generateForumTextResult(textConfig, request, { captureTrace: true });
         raw = result.text;
         let generated;
@@ -1169,6 +2021,24 @@ async function runGeneration({ automatic = false } = {}) {
         connectGeneratedReposts(data.posts, generated.posts);
         data.posts.push(...generated.posts);
         linkNpcAuthors(data, generated.posts);
+        let worldApplied = [];
+        let routed = [];
+        let safetyBlocked = [];
+        try {
+            const normalizedUpdates = { ...normalizeWorldUpdates(raw), ...localUpdates };
+            const filtered = filterWorldUpdatesBySafety(normalizedUpdates, settings, data);
+            safetyBlocked = filtered.blocked;
+            const before = { reportCount: data.world.reports.length };
+            worldApplied = applyWorldUpdates(data, filtered.updates, settings);
+            routed = routeWorldUpdatesToApp(data, filtered.updates, before);
+            for (const moduleId of linkedIds) setModuleDecision(data, moduleId, 'generated', '已随论坛刷新联动生成，共用一次 API 请求', { generated: true });
+            const proactiveNames = routeProactiveDirectMessages(data, normalizeProactiveDirectMessages(raw));
+            if (proactiveNames.length) routed.push(`主动私信 ${proactiveNames.length}`);
+            if (safetyBlocked.length) data.world.auditLog.push({ id: createId('audit'), moduleId: 'safety', summary: `已按剧情禁区拦截：${safetyBlocked.join('、')}`, createdAt: Date.now() });
+            for (let index = 0; index < Number(filtered.acceptedSevere || 0); index += 1) data.world.auditLog.push({ id: createId('audit'), moduleId: 'severity', summary: '本轮允许了一项重大剧情事件', createdAt: Date.now() });
+        }
+        catch (worldError) { console.warn('[微坛] 帖子已生成，但联动模块数据无法读取', worldError); }
+        setModuleDecision(data, 'forum', 'generated', automatic ? '已跟随酒馆正文自动刷新' : '已由用户手动刷新', { generated: true });
         addMentionNotifications(data, generated.posts);
         const removed = await enforcePostRetention(data);
         logEntry = appendGenerationLog(data, {
@@ -1183,7 +2053,9 @@ async function runGeneration({ automatic = false } = {}) {
         });
         await saveForumData(data, true);
         syncInjection();
-        notify('success', `${automatic ? '论坛已自动更新' : `已生成 ${generated.posts.length} 篇动态`}${removed ? `，清理 ${removed} 篇旧帖` : ''}`);
+        if (!(automatic && settings.automation.quietHours.behavior === 'mute' && isQuietHours(settings))) {
+            notify('success', `${automatic ? '论坛已自动更新' : `已生成 ${generated.posts.length} 篇动态`}${worldApplied.length ? `，并更新 ${worldApplied.join('、')}` : ''}${routed.length ? `；${[...new Set(routed)].join('、')}已送达` : ''}${safetyBlocked.length ? `；已拦截禁区事件：${safetyBlocked.join('、')}` : ''}${removed ? `，清理 ${removed} 篇旧帖` : ''}`);
+        }
         generationComplete = true;
         if (getApiConfig('image').autoGenerate) {
             const target = generated.posts.find(post => post.imagePrompt);
@@ -1198,6 +2070,7 @@ async function runGeneration({ automatic = false } = {}) {
         console.error('[微坛] 生成失败', error);
         if (!generationComplete) {
             const data = getForumData();
+            setModuleDecision(data, 'forum', 'error', `生成失败：${error?.message || error}`);
             if (logEntry) {
                 logEntry.status = 'error';
                 logEntry.error = String(error?.stack || error?.message || error || '生成失败').slice(0, 10000);
@@ -1223,6 +2096,102 @@ async function runGeneration({ automatic = false } = {}) {
     }
 }
 
+async function runWorldModuleGeneration(moduleId, { reportId = '', forceApi = false } = {}) {
+    const settings = getSettings();
+    const definition = getModuleDefinition(moduleId);
+    if (!definition || moduleId === 'forum' || !settings.modules[moduleId]?.enabled) return;
+    if (viewState.moduleBusy.has(moduleId)) return;
+    if (!hasActiveChat()) return notify('warning', '请先打开一个角色聊天');
+    if (moduleId === 'fortune' && forceApi && !settings.modules.fortune.allowApiDraw) return notify('warning', '请先在运势模块设置中开启“允许 AI 生成抽签结果”');
+    if (moduleId === 'moderation' && reportId && !settings.moderation.systemAdminEnabled) return notify('warning', '系统 AI 管理员当前未开启');
+    if (settings.modules[moduleId].generationMode === 'linked' && !reportId && !forceApi) return notify('info', `${definition.name}正在持续联动；请刷新论坛，仍只调用一次 API`);
+    viewState.moduleBusy.add(moduleId);
+    render();
+    let result = null;
+    let config = null;
+    try {
+        const data = getForumData();
+        if (moduleId === 'fortune' && settings.modules.fortune.generationMode === 'local' && !forceApi) {
+            const fortune = createLocalFortune(new Date(), `${data.topic}|${getChatSnapshot().characterId}`);
+            const changed = data.world.fortune?.date !== fortune.date || !data.world.fortune?.local;
+            if (changed) {
+                const updates = { fortune };
+                applyWorldUpdates(data, updates, settings);
+                routeWorldUpdatesToApp(data, updates);
+            }
+            setModuleDecision(data, 'fortune', 'local', changed ? '已生成今日本地运势，未调用 API' : '今日本地运势已经生成，未调用 API', { generated: changed });
+            await saveForumData(data, true);
+            syncInjection();
+            notify('success', changed ? '今日运势已在本地生成，没有调用 API' : '今日运势没有变化，也没有调用 API');
+            return;
+        }
+        const sourceContext = await getGenerationSourceContext();
+        const request = buildWorldModuleRequest({ moduleId, settings, data, sourceContext });
+        if (moduleId === 'fortune' && forceApi) request.user += '\n\n【用户主动 AI 抽签】\n这是用户明确点击的一次 AI 抽签。请结合当前世界资料生成全新的今日签，但保持影响轻微、可逆，不得强制剧情结果。';
+        if (reportId) {
+            const report = data.world.reports.find(item => item.id === reportId);
+            const post = report && data.posts.find(item => item.id === report.postId);
+            if (!report || !post) throw new Error('举报或原帖已不存在');
+            request.user += `\n\n【本次必须审理的举报】\n你是系统 AI 管理员“${settings.moderation.systemAdminName || '巡界者'}”。举报原因：${report.reason}\n原帖ID：${post.id}\n作者：@${post.handle}\n正文：${post.content}\n请严格依据社区规则，只为这份举报返回一条 moderationActions；actorHandle 可以留空。`;
+            report.status = 'reviewing';
+        }
+        config = getModuleApiConfig(moduleId);
+        result = await generateForumTextResult(config, request, { captureTrace: true });
+        const filtered = filterWorldUpdatesBySafety(normalizeWorldUpdates(result.text), settings, data);
+        const updates = filtered.updates;
+        if (reportId) {
+            const action = updates.moderationActions?.find(item => item.postId === data.world.reports.find(report => report.id === reportId)?.postId);
+            if (action) {
+                action.systemAdmin = true;
+                action.reportId = reportId;
+            }
+        }
+        if (!Object.keys(updates).length) throw new Error(`${definition.name}模块没有返回可读取的数据`);
+        const before = { reportCount: data.world.reports.length };
+        const applied = applyWorldUpdates(data, updates, settings);
+        routeWorldUpdatesToApp(data, updates, before);
+        setModuleDecision(data, moduleId, 'generated', '已使用本模块独立 API 生成', { generated: true });
+        if (filtered.blocked.length) data.world.auditLog.push({ id: createId('audit'), moduleId: 'safety', summary: `已按剧情禁区拦截：${filtered.blocked.join('、')}`, createdAt: Date.now() });
+        for (let index = 0; index < Number(filtered.acceptedSevere || 0); index += 1) data.world.auditLog.push({ id: createId('audit'), moduleId: 'severity', summary: '本轮允许了一项重大剧情事件', createdAt: Date.now() });
+        if (reportId) {
+            const report = data.world.reports.find(item => item.id === reportId);
+            const action = updates.moderationActions?.find(item => item.postId === report?.postId);
+            if (report && action) {
+                report.status = settings.modules.moderation.automation === 'auto' ? (action.action === 'dismiss' ? 'dismissed' : 'actioned') : 'reviewing';
+                report.decision = action.reason;
+                report.action = action.action === 'dismiss' ? 'none' : action.action;
+                report.reviewerNpcId = 'system-ai-admin';
+                report.updatedAt = Date.now();
+            }
+        }
+        appendGenerationLog(data, {
+            status: 'success', automatic: false, provider: config.provider,
+            model: config.provider === 'sillytavern' ? '酒馆当前模型' : config.model,
+            reasoning: result.reasoning, output: result.text, postCount: 0,
+        });
+        await saveForumData(data, true);
+        syncInjection();
+        notify('success', `${applied.length ? `${definition.name}已更新：${applied.join('、')}` : `${definition.name}已生成，等待你确认操作`}${filtered.blocked.length ? `；已拦截禁区事件：${filtered.blocked.join('、')}` : ''}`);
+    } catch (error) {
+        const data = getForumData();
+        setModuleDecision(data, moduleId, 'error', `生成失败：${error?.message || error}`);
+        if (reportId) {
+            const report = data.world.reports.find(item => item.id === reportId);
+            if (report) report.status = 'pending';
+        }
+        appendGenerationLog(data, {
+            status: 'error', automatic: false, provider: config?.provider || 'unknown',
+            model: config?.provider === 'sillytavern' ? '酒馆当前模型' : config?.model,
+            reasoning: result?.reasoning, output: result?.text, error: error?.stack || error?.message || error,
+        });
+        try { await saveForumData(data, true); } catch { /* keep the original error */ }
+        notify('error', `${definition.name}生成失败，详情已保存到运行后台`);
+    } finally {
+        viewState.moduleBusy.delete(moduleId);
+        render();
+    }
+}
+
 async function runThreadContinuation(postId, userComment) {
     const post = findPost(postId);
     if (!post || viewState.replyingPosts.has(postId)) return;
@@ -1232,7 +2201,7 @@ async function runThreadContinuation(postId, userComment) {
         const data = getForumData();
         const request = buildThreadReplyRequest({ post, userComment, npcs: data.npcs, sourceContext: await getGenerationSourceContext(), settings: getSettings() });
         const replyMaximum = Math.max(1, Math.min(8, Number(getSettings().generation.repliesMax || 3)));
-        const replies = normalizeThreadReplies(await generateForumText(getApiConfig('text'), request)).filter(reply => !data.npcs.some(npc => npc.blocked && (
+        const replies = normalizeThreadReplies(await generateForumText(getModuleApiConfig('forum'), request)).filter(reply => !data.npcs.some(npc => npc.blocked && (
             String(npc.handle || '').replace(/^@/, '').toLocaleLowerCase() === String(reply.handle || '').replace(/^@/, '').toLocaleLowerCase()
             || (String(npc.name || '').trim() && String(npc.name || '').trim() === String(reply.author || '').trim())
         ))).slice(0, replyMaximum);
@@ -1277,8 +2246,8 @@ async function runNpcProfileGeneration(npcId) {
     try {
         const evidence = collectNpcEvidence(data, npcId);
         if (npc.bindingContent) evidence.push(`绑定资料（${npc.bindingLabel || '已绑定'}）：${npc.bindingContent}`);
-        const request = buildNpcProfileRequest({ npc, evidence, sourceContext: await getGenerationSourceContext() });
-        applyNpcProfile(npc, normalizeNpcProfile(await generateForumText(getApiConfig('text'), request)));
+        const request = buildNpcProfileRequest({ npc, evidence, sourceContext: await getGenerationSourceContext(), settings: getSettings() });
+        applyNpcProfile(npc, normalizeNpcProfile(await generateForumText(getModuleApiConfig('forum'), request)));
         await saveForumData(data, true);
         syncInjection();
         notify('success', `${npc.name} 的主页与人设已生成`);
@@ -1408,8 +2377,8 @@ async function runDirectMessageReply(conversationId) {
         const npc = baseNpc ? { ...baseNpc, persona: [baseNpc.persona, baseNpc.bindingContent].filter(Boolean).join('\n绑定资料：') } : null;
         const charRole = conversation.type === 'char' ? data.npcs.find(item => item.bindingType === 'char' && item.bindingTarget === conversation.targetId) : null;
         const scopedRole = baseNpc || charRole;
-        const request = buildDirectMessageRequest({ conversation, messages: conversation.messages, npc, sourceContext: scopedRole ? await getRoleScopedSourceContext(scopedRole.id) : await getGenerationSourceContext(), userName: getChatSnapshot().names.user || 'User' });
-        const reply = normalizeDirectMessage(await generateForumText(getApiConfig('text'), request));
+        const request = buildDirectMessageRequest({ conversation, messages: conversation.messages, npc, sourceContext: scopedRole ? await getRoleScopedSourceContext(scopedRole.id) : await getGenerationSourceContext(), userName: getChatSnapshot().names.user || 'User', settings: getSettings() });
+        const reply = normalizeDirectMessage(await generateForumText(getModuleApiConfig('forum'), request));
         conversation.messages.push({ id: createId('dm'), role: 'assistant', content: reply, createdAt: Date.now() });
         if (scopedRole) {
             const lastUserMessage = [...conversation.messages].reverse().find(message => message.role === 'user')?.content || '';
@@ -1437,8 +2406,8 @@ async function runRoleDirectMessage(conversationId, speakerId, direction = '') {
     viewState.dmBusy = true;
     render();
     try {
-        const request = buildRoleDirectMessageRequest({ conversation, messages: conversation.messages, speaker, otherRole, sourceContext: await getRoleScopedSourceContext(speaker.id, { channel: 'private', otherRoleId: otherRole.id }), direction });
-        const reply = normalizeDirectMessage(await generateForumText(getApiConfig('text'), request));
+        const request = buildRoleDirectMessageRequest({ conversation, messages: conversation.messages, speaker, otherRole, sourceContext: await getRoleScopedSourceContext(speaker.id, { channel: 'private', otherRoleId: otherRole.id }), direction, settings: getSettings() });
+        const reply = normalizeDirectMessage(await generateForumText(getModuleApiConfig('forum'), request));
         conversation.messages.push({ id: createId('dm'), role: 'assistant', senderNpcId: speaker.id, senderName: speaker.name, content: reply, private: true, createdAt: Date.now() });
         conversation.updatedAt = Date.now();
         const memoryLine = `与${otherRole.name}的私信：${speaker.name}说“${reply}”`;
@@ -1558,7 +2527,24 @@ function handleSwitchAction(action, checked) {
         'toggle-notification-reply': 'notifications.reply', 'toggle-notification-mention': 'notifications.mention',
         'toggle-notification-like': 'notifications.like', 'toggle-notification-follow': 'notifications.follow',
         'toggle-notification-mutual': 'notifications.mutual', 'toggle-notification-system': 'notifications.system',
+        'toggle-notification-tasks': 'notifications.tasks', 'toggle-notification-companion': 'notifications.companion',
+        'toggle-notification-health': 'notifications.health', 'toggle-notification-moderation': 'notifications.moderation',
         'toggle-information-boundary': 'informationBoundary.enabled', 'toggle-role-direct-messages': 'social.roleDirectMessages',
+        'toggle-role-follow-before-dm': 'social.requireRoleFollowBeforeDm',
+        'toggle-proactive-dms': 'social.proactiveDms.enabled', 'toggle-proactive-with-forum': 'social.proactiveDms.withForumRefresh',
+        'toggle-proactive-with-auto': 'social.proactiveDms.withAutomaticRefresh', 'toggle-proactive-require-follow': 'social.proactiveDms.requireFollow',
+        'toggle-quiet-hours': 'automation.quietHours.enabled',
+        'toggle-forbidden-permanentDeath': 'automation.forbiddenEvents.permanentDeath',
+        'toggle-forbidden-irreversibleInjury': 'automation.forbiddenEvents.irreversibleInjury',
+        'toggle-forbidden-severeIllness': 'automation.forbiddenEvents.severeIllness',
+        'toggle-forbidden-bankruptcy': 'automation.forbiddenEvents.bankruptcy',
+        'toggle-forbidden-scam': 'automation.forbiddenEvents.scam',
+        'toggle-forbidden-permanentTaskFailure': 'automation.forbiddenEvents.permanentTaskFailure',
+        'toggle-fortune-api-draw': 'modules.fortune.allowApiDraw',
+        'toggle-system-ai-admin': 'moderation.systemAdminEnabled',
+        'toggle-npc-reports': 'moderation.npcReportsEnabled',
+        'toggle-orchestrator': 'orchestration.enabled', 'toggle-combined-generation': 'orchestration.combinedGeneration',
+        'toggle-world-time': 'orchestration.worldTimeEnabled',
         'toggle-floating-button': 'ui.floatingButton',
     };
     if (paths[action]) setSettingByPath(paths[action], checked);
@@ -1567,7 +2553,7 @@ function handleSwitchAction(action, checked) {
     else if (action === 'toggle-auto-image') updateApiConfig('image', 'autoGenerate', checked);
     else if (action === 'toggle-remember-keys') setRememberApiKeys(checked);
     if (action === 'toggle-source-world' && checked && !viewState.worldCatalog.length) void refreshWorldCatalog();
-    render();
+    render({ preserveScroll: true });
 }
 
 async function setRoleModeration(npcId, kind, enabled) {
@@ -1600,9 +2586,290 @@ async function handleRootClick(event) {
     if (!target) return;
     const action = target.dataset.action;
     if (action === 'close') return closeForum();
+    if (action === 'dismiss-toast') {
+        viewState.toasts = viewState.toasts.filter(item => item.id !== target.dataset.toastId);
+        return paintInAppToasts();
+    }
     if (action === 'switch-tab') { if (target.dataset.tab === 'messages') viewState.mobileDmChat = false; return setActiveTab(target.dataset.tab); }
-    if (action === 'me-section') return setMeSection(target.dataset.section);
-    if (action === 'message-mode') { viewState.messageMode = target.dataset.mode === 'notifications' ? 'notifications' : 'dm'; if (viewState.messageMode === 'dm') viewState.mobileDmChat = false; return render(); }
+    if (action === 'open-settings') return setMeSection(target.dataset.section || 'modules');
+    if (action === 'open-world-page') {
+        const moduleId = target.dataset.moduleId;
+        if (!getSettings().modules[moduleId]?.enabled) return;
+        getSettings().ui.activeTab = 'services';
+        viewState.worldPage = moduleId;
+        viewState.selectedPostId = '';
+        viewState.publicNpcId = '';
+        saveSettings();
+        return render();
+    }
+    if (action === 'back-world-home') { viewState.worldPage = ''; return render(); }
+    if (action === 'choose-companion-species') {
+        const species = COMPANION_SPECIES.find(item => item.id === target.dataset.speciesId);
+        if (!species) return;
+        const data = getForumData();
+        data.world.companion.species = species.name;
+        data.world.companion.avatarUrl = '';
+        data.world.companion.updatedAt = Date.now();
+        ensureCompanionConversation(data);
+        await saveForumData(data, true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (action === 'focus-companion-field') {
+        const field = target.dataset.field;
+        const input = getRoot().querySelector(`[data-companion-field="${field}"]`);
+        input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        input?.focus({ preventScroll: true });
+        return;
+    }
+    if (action === 'toggle-companion-profile') {
+        event.preventDefault();
+        viewState.companionProfileOpen = !viewState.companionProfileOpen;
+        return render({ preserveScroll: true });
+    }
+    if (action === 'companion-menu-nav') {
+        const total = viewState.companionFoodMenuOpen ? COMPANION_FOODS.length : 4;
+        const direction = Number(target.dataset.direction || 1);
+        if (viewState.companionFoodMenuOpen) viewState.companionFoodIndex = (Number(viewState.companionFoodIndex || 0) + direction + total) % total;
+        else viewState.companionMenuIndex = (Number(viewState.companionMenuIndex || 0) + direction + total) % total;
+        return render({ preserveScroll: true });
+    }
+    if (action === 'companion-menu-confirm') {
+        if (viewState.companionFoodMenuOpen) {
+            const food = COMPANION_FOODS[Math.max(0, Math.min(COMPANION_FOODS.length - 1, Number(viewState.companionFoodIndex || 0)))];
+            getRoot().querySelector(`[data-action="companion-feed-food"][data-food-id="${food.id}"]`)?.click();
+            return;
+        }
+        const care = ['feed', 'pet', 'play', 'rest'][Math.max(0, Math.min(3, Number(viewState.companionMenuIndex || 0)))];
+        getRoot().querySelector(`[data-action="companion-care"][data-care="${care}"]`)?.click();
+        return;
+    }
+    if (action === 'companion-food-back') {
+        viewState.companionFoodMenuOpen = false;
+        return render({ preserveScroll: true });
+    }
+    if (action === 'companion-feed-food') {
+        const food = COMPANION_FOODS.find(item => item.id === target.dataset.foodId);
+        if (!food) return;
+        const data = getForumData();
+        const companion = data.world.companion;
+        const habit = getCompanionHabit(companion);
+        const favorite = food.id === habit.favorite;
+        const liked = favorite || habit.likes.includes(food.id);
+        const happiness = food.happiness + (favorite ? 8 : liked ? 3 : -4);
+        companion.satiety = Math.min(100, Number(companion.satiety || 0) + food.satiety);
+        companion.energy = Math.min(100, Number(companion.energy || 0) + food.energy);
+        companion.happiness = Math.max(0, Math.min(100, Number(companion.happiness || 0) + happiness));
+        companion.bond = Math.min(100, Number(companion.bond || 0) + (favorite ? 3 : liked ? 2 : 1));
+        companion.mood = favorite ? '最喜欢' : liked ? '满足' : '迟疑';
+        companion.lastFood = food.id;
+        companion.lastAction = 'feed';
+        companion.message = favorite ? `${companion.name}一眼认出最喜欢的${food.name}，开心得整只都跳了起来！` : liked ? `${companion.name}认真吃完${food.name}，满足地靠近了屏幕。` : `${companion.name}试探着尝了一口${food.name}；这并不是它最习惯的食物。`;
+        companion.lastInteractionAt = Date.now();
+        companion.updatedAt = Date.now();
+        if (companion.status === 'resting') companion.status = 'home';
+        viewState.companionFoodMenuOpen = false;
+        await saveForumData(data, true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (action === 'choose-companion-device') {
+        const skin = COMPANION_DEVICE_SKINS.find(item => item.id === target.dataset.deviceSkin);
+        if (!skin) return;
+        const data = getForumData();
+        data.world.companion.deviceSkin = skin.id;
+        data.world.companion.updatedAt = Date.now();
+        await saveForumData(data, true);
+        return render({ preserveScroll: true });
+    }
+    if (action === 'choose-companion-custom') {
+        const data = getForumData();
+        data.world.companion.species = '自定义旅伴';
+        data.world.companion.avatarUrl = '';
+        data.world.companion.updatedAt = Date.now();
+        ensureCompanionConversation(data);
+        await saveForumData(data, true);
+        syncInjection();
+        render({ preserveScroll: true });
+        queueMicrotask(() => getRoot()?.querySelector('[data-companion-field="species"]')?.focus());
+        return;
+    }
+    if (action === 'companion-care') {
+        const data = getForumData();
+        const companion = data.world.companion;
+        const care = target.dataset.care;
+        if (care === 'feed') {
+            viewState.companionMenuIndex = 0;
+            viewState.companionFoodIndex = 0;
+            viewState.companionFoodMenuOpen = true;
+            return render({ preserveScroll: true });
+        }
+        const deltas = {
+            pet: { satiety: 0, energy: 1, happiness: 12, bond: 3, mood: '亲昵' },
+            play: { satiety: -5, energy: -9, happiness: 16, bond: 2, mood: '兴奋' },
+            rest: { satiety: -2, energy: 22, happiness: 3, bond: 1, mood: '安心' },
+        }[care];
+        if (!deltas) return;
+        viewState.companionMenuIndex = ['feed', 'pet', 'play', 'rest'].indexOf(care);
+        for (const field of ['satiety', 'energy', 'happiness', 'bond']) companion[field] = Math.max(0, Math.min(100, Number(companion[field] || 0) + deltas[field]));
+        companion.mood = deltas.mood;
+        companion.lastAction = care;
+        companion.message = care === 'pet' ? getCompanionHabit(companion).pet : care === 'play' ? getCompanionHabit(companion).play : getCompanionHabit(companion).rest;
+        companion.lastInteractionAt = Date.now();
+        companion.updatedAt = Date.now();
+        if (care === 'rest') companion.status = 'resting';
+        else if (companion.status === 'resting') companion.status = 'home';
+        await saveForumData(data, true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (action === 'companion-depart-local') {
+        const data = getForumData();
+        const companion = data.world.companion;
+        if (companion.status === 'away') return;
+        if (Number(companion.energy || 0) < 15 || Number(companion.satiety || 0) < 10) return notify('warning', '旅伴有点累或饿，先照顾它一下吧');
+        const fortune = data.world.fortune;
+        const direction = fortune?.modifiers?.luckyDirection || ['东', '南', '西', '北'][Math.floor(Math.random() * 4)];
+        const places = ['风铃小径', '旧街转角', '河岸集市', '林间驿站', '钟楼附近', '发光苔原'];
+        const detour = Number(fortune?.modifiers?.detour || 0) > 5;
+        const destination = `${direction}边的${places[Math.floor(Math.random() * places.length)]}`;
+        const trip = { id: createId('trip'), traveler: companion.name, travelerNpcId: '', destination, status: 'away', notes: detour ? '路上好像出现了一条很有趣的岔路。' : '刚刚踏上旅途，还没有寄回见闻。', souvenir: '', createdAt: Date.now(), updatedAt: Date.now() };
+        data.world.trips.push(trip);
+        companion.status = 'away';
+        companion.destination = destination;
+        companion.energy = Math.max(0, Number(companion.energy || 0) - 10);
+        companion.satiety = Math.max(0, Number(companion.satiety || 0) - 7);
+        companion.luckyDirection = direction;
+        companion.lastAction = 'depart';
+        companion.message = detour ? `我往${direction}边走啦，好像发现了一条岔路！` : `我带好行囊，往${direction}边出发啦。`;
+        companion.departedAt = Date.now();
+        companion.departedCarrying = companion.carrying || '';
+        companion.expectedReturnAt = Date.now() + 60 * 60000;
+        companion.updatedAt = Date.now();
+        const conversation = ensureCompanionConversation(data);
+        addConversationMessage(conversation, companion.message, { kind: 'companion', tripId: trip.id });
+        addModuleNotification(data, 'companion', `${companion.name}已经出发：${destination}`, { actorName: companion.name, moduleId: 'travel', itemId: trip.id });
+        await saveForumData(data, true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (action === 'companion-signal-local') {
+        const data = getForumData();
+        const companion = data.world.companion;
+        const trip = [...data.world.trips].reverse().find(item => item.status === 'away');
+        if (!trip) return notify('info', '现在还没有进行中的旅途');
+        const modifier = Number(data.world.fortune?.modifiers?.souvenir || 0);
+        const found = Math.random() * 100 < 28 + modifier;
+        const observations = ['遇到一阵会把叶片吹成漩涡的风', '在路边听见了陌生又轻快的铃声', '发现墙角藏着一枚奇怪的小记号', '和一位路过的人交换了方向', '停下来认真看了一会儿云'];
+        const observation = observations[Math.floor(Math.random() * observations.length)];
+        trip.notes = `${trip.notes ? `${trip.notes} ` : ''}${companion.name}${observation}。`;
+        if (found && !trip.souvenir) trip.souvenir = ['一枚圆润石子', '褪色的小丝带', '会反光的叶片', '迷你路牌挂件'][Math.floor(Math.random() * 4)];
+        trip.updatedAt = Date.now();
+        companion.lastAction = 'signal';
+        companion.mood = found ? '惊喜' : '专注';
+        companion.message = `${observation}。${trip.souvenir ? `我还捡到${trip.souvenir}！` : '我会继续看看。'}`;
+        companion.updatedAt = Date.now();
+        const conversation = ensureCompanionConversation(data);
+        addConversationMessage(conversation, companion.message, { kind: 'companion', tripId: trip.id });
+        addModuleNotification(data, 'companion', `${companion.name}寄回一枚旅途讯号`, { actorName: companion.name, moduleId: 'travel', itemId: trip.id, conversationId: conversation.id });
+        await saveForumData(data, true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (action === 'revoke-local-fortune') {
+        const data = getForumData();
+        if (!data.world.fortune) return;
+        data.world.fortune = null;
+        data.world.companion.luckyDirection = '';
+        if (/幸运方向/.test(data.world.companion.message || '')) data.world.companion.message = '今天想按自己的心情挑一个方向。';
+        setModuleDecision(data, 'fortune', 'local', '已手动撤销今日运势，未调用 API', { generated: false });
+        await saveForumData(data, true);
+        syncInjection();
+        notify('success', '已撤销今日运势');
+        return render({ preserveScroll: true });
+    }
+    if (action === 'draw-local-fortune') {
+        const data = getForumData();
+        const fortune = createLocalFortune(new Date(), `${data.topic}|${getChatSnapshot().characterId || 'standalone'}`, target.dataset.choice || 'middle');
+        if (data.world.fortune?.date === fortune.date) return render();
+        if (data.world.fortune) data.world.fortuneHistory ||= [], data.world.fortuneHistory.push(data.world.fortune);
+        data.world.fortune = fortune;
+        data.world.companion.luckyDirection = fortune.modifiers.luckyDirection;
+        data.world.companion.message = `今天的幸运方向好像是${fortune.modifiers.luckyDirection}边。`;
+        setModuleDecision(data, 'fortune', 'local', '已在本地翻开今日签，未调用 API', { generated: true });
+        await saveForumData(data, true);
+        syncInjection();
+        notify('success', '今日签已在本地生成，没有调用 API');
+        return render();
+    }
+    if (action === 'draw-api-fortune') {
+        if (!getSettings().modules.fortune.allowApiDraw) return notify('warning', '请先在运势模块设置中开启 AI 抽签');
+        return void runWorldModuleGeneration('fortune', { forceApi: true });
+    }
+    if (action === 'create-local-health') {
+        const data = getForumData();
+        const npcId = getRoot().querySelector('#tf-health-subject')?.value || '';
+        const npc = data.npcs.find(item => item.id === npcId);
+        const item = createLocalHealthEvent({ subject: npc?.name || getMyDisplayName(), subjectNpcId: npc?.id || '', seed: `${data.world.health.length}|${data.topic}` });
+        data.world.health.push(item);
+        addModuleNotification(data, 'health', `${item.subject}注意到：${item.name}`, { actorNpcId: npc?.id || '', actorName: item.subject, moduleId: 'health', itemId: item.id });
+        await saveForumData(data, true);
+        syncInjection();
+        return render();
+    }
+    if (['health-observe', 'health-find-provider', 'health-consult', 'health-treat', 'health-resolve'].includes(action)) {
+        const data = getForumData();
+        const item = data.world.health.find(entry => entry.id === target.closest('[data-world-item-id]')?.dataset.worldItemId);
+        if (!item) return;
+        if (action === 'health-observe') { item.stage = 'noticed'; item.progress = Math.max(25, Number(item.progress || 0)); item.careNote = '先记下变化，看看休息后是否缓解。'; }
+        if (action === 'health-find-provider') {
+            const medicalPattern = /医生|医师|医者|牙医|大夫|郎中|治疗|治愈|医疗|healer|doctor|medic/i;
+            const providerNpc = getRoleLibrary(data).find(npc => medicalPattern.test(`${npc.name} ${npc.bio} ${npc.signature} ${npc.bindingContent}`));
+            const context = `${getChatSnapshot().characterPersona || ''} ${getChatSnapshot().worldInfo || ''}`;
+            const fallback = /古代|江湖|王朝|修仙|仙侠/.test(context) ? '附近医馆的郎中' : /魔法|精灵|奇幻|神殿/.test(context) ? '社区登记的治疗师' : /星际|太空|赛博|未来/.test(context) ? '社区医疗机器人' : item.name.includes('智齿') ? '社区牙科诊所' : '社区门诊医生';
+            item.provider = providerNpc?.name || fallback;
+            item.providerNpcId = providerNpc?.id || '';
+            item.stage = 'seeking';
+            item.progress = 35;
+        }
+        if (action === 'health-consult') { item.stage = 'consulting'; item.progress = 50; item.careNote ||= '已经了解基本情况，准备给出处理建议。'; }
+        if (action === 'health-treat') { item.stage = 'recovering'; item.status = 'recovering'; item.progress = 78; item.careNote ||= '按照适合当前世界的方式处理，并观察恢复。'; }
+        if (action === 'health-resolve') { item.stage = 'resolved'; item.status = 'resolved'; item.progress = 100; item.careNote = '这次身体事件已经告一段落。'; }
+        item.updatedAt = Date.now();
+        addModuleNotification(data, 'health', `${item.subject} · ${item.name}：${item.stage === 'resolved' ? '已经恢复' : '进度有更新'}`, { actorNpcId: item.subjectNpcId, actorName: item.subject, moduleId: 'health', itemId: item.id });
+        await saveForumData(data, true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (action === 'open-module-context') {
+        const moduleId = target.dataset.moduleId;
+        if (moduleId === 'moderation') return setMeSection('moderation');
+        if (getSettings().modules[moduleId]?.enabled) {
+            getSettings().ui.activeTab = 'services';
+            viewState.worldPage = moduleId;
+            saveSettings();
+            return render();
+        }
+    }
+    if (action === 'me-section') {
+        const navScrollLeft = Number(target.closest('.tf-me-nav')?.scrollLeft || viewState.settingsNavScrollLeft || 0);
+        viewState.settingsNavScrollLeft = navScrollLeft;
+        setMeSection(target.dataset.section);
+        const restoreSettingsNav = () => {
+            const nav = getRoot()?.querySelector('.tf-settings-page .tf-me-nav');
+            if (nav) nav.scrollLeft = navScrollLeft;
+        };
+        queueMicrotask(() => {
+            restoreSettingsNav();
+            requestAnimationFrame(restoreSettingsNav);
+        });
+        return;
+    }
+    if (action === 'profile-tab') { viewState.profileTab = target.dataset.profileTab || 'posts'; return render(); }
+    if (action === 'clear-settings-search') { viewState.settingsSearch = ''; return render({ preserveScroll: true }); }
+    if (action === 'settings-search-result') { viewState.settingsSearch = ''; viewState.settingsHighlight = target.dataset.section || ''; globalThis.setTimeout(() => { viewState.settingsHighlight = ''; }, 1800); return setMeSection(target.dataset.section); }
+    if (action === 'message-mode') { viewState.messageMode = ['notifications', 'tasks'].includes(target.dataset.mode) ? target.dataset.mode : 'dm'; if (viewState.messageMode === 'dm') viewState.mobileDmChat = false; return render(); }
+    if (action === 'notification-filter') { viewState.notificationFilter = target.dataset.filter || 'all'; return render(); }
     if (action === 'mark-all-notifications') {
         for (const item of getForumData().notifications) item.read = true;
         await saveForumData(getForumData(), true);
@@ -1618,6 +2885,132 @@ async function handleRootClick(event) {
         notify('success', '运行后台记录已清空');
         return render();
     }
+    if (action === 'restore-all-builtin-prompts') {
+        if (!window.confirm('确定把所有内置提示词恢复为默认内容吗？论坛设定不会受到影响。')) return;
+        getSettings().builtinPrompts = { ...DEFAULT_BUILTIN_PROMPTS };
+        saveSettings();
+        syncInjection();
+        return render();
+    }
+    if (action === 'restore-builtin-prompt') {
+        const id = target.dataset.promptId;
+        if (id && Object.prototype.hasOwnProperty.call(DEFAULT_BUILTIN_PROMPTS, id)) getSettings().builtinPrompts[id] = DEFAULT_BUILTIN_PROMPTS[id];
+        saveSettings();
+        syncInjection();
+        return render();
+    }
+    if (action === 'module-tools') {
+        viewState.openModuleToolsId = viewState.openModuleToolsId === target.dataset.moduleId ? '' : target.dataset.moduleId;
+        return render({ preserveScroll: true });
+    }
+    if (action === 'export-module') {
+        const moduleId = target.dataset.moduleId;
+        const definition = getModuleDefinition(moduleId);
+        const settings = getSettings();
+        return downloadJson(`tavern-forum-${moduleId}-settings.json`, {
+            format: 'tavern-forum-module-settings', version: 1, moduleId,
+            settings: settings.modules[moduleId],
+            builtinPrompt: settings.builtinPrompts[moduleId === 'tasks' ? 'task' : moduleId] || '',
+            notificationEnabled: settings.notifications[{ tasks: 'tasks', travel: 'companion', health: 'health', moderation: 'moderation' }[moduleId] || 'system'],
+        });
+    }
+    if (action === 'import-module') {
+        viewState.pendingModuleImportId = target.dataset.moduleId || '';
+        return getRoot().querySelector('#tf-import-module-file')?.click();
+    }
+    if (action === 'reset-module') {
+        const moduleId = target.dataset.moduleId;
+        const definition = getModuleDefinition(moduleId);
+        if (!definition || !window.confirm(`只恢复“${definition.name}”的默认设置吗？现有内容不会删除。`)) return;
+        getSettings().modules[moduleId] = JSON.parse(JSON.stringify(DEFAULT_SETTINGS.modules[moduleId]));
+        const promptId = moduleId === 'tasks' ? 'task' : moduleId;
+        if (DEFAULT_BUILTIN_PROMPTS[promptId]) getSettings().builtinPrompts[promptId] = DEFAULT_BUILTIN_PROMPTS[promptId];
+        saveSettings();
+        syncInjection();
+        notify('success', `已恢复“${definition.name}”的默认设置`);
+        return render({ preserveScroll: true });
+    }
+    if (action === 'refresh-world-module') return void runWorldModuleGeneration(target.dataset.moduleId);
+    if (action === 'set-task-status') {
+        const data = getForumData();
+        const task = data.world.tasks.find(item => item.id === target.closest('[data-world-item-id]')?.dataset.worldItemId);
+        if (task) {
+            task.status = target.dataset.status; task.updatedAt = Date.now();
+            if (task.status === 'completed' && task.reward) {
+                const source = `任务奖励 · ${task.id}`;
+                if (!data.world.inventory.some(item => item.source === source)) data.world.inventory.push({ id: createId('item'), name: task.reward, description: `完成“${task.title}”后获得的奖励。`, quantity: 1, effect: '按任务描述在合适的情境中使用。', source, usable: true, consumed: false, createdAt: Date.now(), updatedAt: Date.now() });
+            }
+            if (['completed', 'failed'].includes(task.status)) addModuleNotification(data, 'tasks', `${task.title}${task.status === 'completed' ? `已完成${task.reward ? `，奖励“${task.reward}”已进入背包` : ''}` : '未能完成'}`, { actorName: task.issuer, moduleId: 'tasks', itemId: task.id });
+            await saveForumData(data, true); syncInjection();
+        }
+        return render();
+    }
+    if (action === 'advance-trip-status') {
+        const data = getForumData();
+        const trip = data.world.trips.find(item => item.id === target.closest('[data-world-item-id]')?.dataset.worldItemId);
+        const next = { planned: 'away', away: 'returned', returned: 'returned', cancelled: 'cancelled' };
+        if (trip) {
+            trip.status = next[trip.status] || 'away';
+            trip.updatedAt = Date.now();
+            if (trip.status === 'returned' && trip.souvenir && !trip.souvenirClaimedAt) {
+                const companionName = data.world.companion.name || trip.traveler || '旅伴';
+                const source = `${companionName}返程 · ${trip.id}`;
+                if (!data.world.inventory.some(item => item.name === trip.souvenir && item.source === source)) data.world.inventory.push({ id: createId('item'), name: trip.souvenir, description: `${companionName}从${trip.destination}带回的小物件。`, quantity: 1, effect: '可收藏，也可在合适的情境中使用。', source, usable: true, consumed: false, createdAt: Date.now(), updatedAt: Date.now() });
+                trip.souvenirClaimedAt = Date.now();
+            }
+            await saveForumData(data, true);
+            syncInjection();
+        }
+        return render();
+    }
+    if (action === 'companion-return') {
+        const data = getForumData();
+        const companion = data.world.companion;
+        const trip = [...data.world.trips].reverse().find(item => ['planned', 'away'].includes(item.status));
+        companion.status = 'home';
+        companion.destination = '';
+        companion.departedAt = 0;
+        companion.expectedReturnAt = 0;
+        companion.bond = Math.min(100, Number(companion.bond || 0) + 1);
+        companion.message = trip?.notes ? `我回来了。${trip.notes}` : '我回来了，正在小窝里休息。';
+        companion.updatedAt = Date.now();
+        if (trip) {
+            trip.status = 'returned';
+            trip.updatedAt = Date.now();
+            const source = `${companion.name}返程 · ${trip.id}`;
+            if (trip.souvenir && !trip.souvenirClaimedAt && !data.world.inventory.some(item => item.name === trip.souvenir && item.source === source)) {
+                data.world.inventory.push({ id: createId('item'), name: trip.souvenir, description: `${companion.name}从${trip.destination}带回的小物件。`, quantity: 1, effect: '可收藏，也可在合适的情境中使用。', source, usable: true, consumed: false, createdAt: Date.now(), updatedAt: Date.now() });
+                trip.souvenirClaimedAt = Date.now();
+                companion.message = `${companion.message} “${trip.souvenir}”已经放进背包。`;
+            }
+        }
+        const conversation = ensureCompanionConversation(data);
+        addConversationMessage(conversation, companion.message, { kind: 'companion', tripId: trip?.id || '' });
+        addModuleNotification(data, 'companion', `${companion.name}旅行归来了${trip?.souvenir ? `，并带回${trip.souvenir}` : ''}`, { actorName: companion.name, moduleId: 'travel', itemId: trip?.id || '' });
+        await saveForumData(data, true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (action === 'advance-health-status') {
+        const data = getForumData();
+        const item = data.world.health.find(entry => entry.id === target.closest('[data-world-item-id]')?.dataset.worldItemId);
+        if (item) { item.status = item.status === 'active' ? 'recovering' : 'resolved'; item.updatedAt = Date.now(); addModuleNotification(data, 'health', `${item.subject}：${item.status === 'resolved' ? '状态已经恢复' : '正在恢复中'}`, { actorName: item.subject, moduleId: 'health', itemId: item.id }); await saveForumData(data, true); syncInjection(); }
+        return render();
+    }
+    if (action === 'use-inventory-item') {
+        const item = getForumData().world.inventory.find(entry => entry.id === target.closest('[data-world-item-id]')?.dataset.worldItemId);
+        if (item && item.quantity > 0) { item.quantity -= 1; item.consumed = item.quantity <= 0; item.updatedAt = Date.now(); getForumData().world.auditLog.push({ id: createId('audit'), moduleId: 'inventory', summary: `使用了 ${item.name}${item.effect ? `：${item.effect}` : ''}`, createdAt: Date.now() }); await saveForumData(getForumData(), true); syncInjection(); }
+        return render();
+    }
+    if (action === 'delete-world-item') {
+        if (!window.confirm('确定删除这条模块记录吗？')) return;
+        const kind = target.dataset.kind;
+        const id = target.closest('[data-world-item-id]')?.dataset.worldItemId;
+        if (['tasks', 'trips', 'inventory', 'health'].includes(kind)) getForumData().world[kind] = getForumData().world[kind].filter(item => item.id !== id);
+        await saveForumData(getForumData(), true);
+        syncInjection();
+        return render();
+    }
     if (action === 'open-notification') {
         const item = getForumData().notifications.find(entry => entry.id === target.dataset.notificationId);
         if (item) item.read = true;
@@ -1629,9 +3022,28 @@ async function handleRootClick(event) {
             saveSettings();
             return render();
         }
+        if (item?.conversationId) {
+            viewState.selectedConversationId = item.conversationId;
+            viewState.messageMode = 'dm';
+            viewState.mobileDmChat = true;
+            getSettings().ui.activeTab = 'messages';
+            saveSettings();
+            return render();
+        }
+        if (item?.moduleId && getSettings().modules[item.moduleId]?.enabled && item.moduleId !== 'moderation') {
+            getSettings().ui.activeTab = 'services';
+            viewState.worldPage = item.moduleId;
+            saveSettings();
+            return render();
+        }
+        if (item?.moduleId === 'moderation') return setMeSection('moderation');
         return render();
     }
-    if (action === 'go-injection-settings') return setMeSection('sources');
+    if (action === 'go-injection-settings') {
+        viewState.pendingSettingsBlock = 'chat-injection';
+        setMeSection('sources');
+        return;
+    }
     if (action === 'generate-posts') return void runGeneration();
     if (action === 'toggle-composer') { viewState.composerOpen = !viewState.composerOpen; return render(); }
     if (action === 'feed-mode') { viewState.feedMode = ['following', 'recommended', 'latest', 'hot'].includes(target.dataset.feed) ? target.dataset.feed : 'recommended'; return render(); }
@@ -1685,6 +3097,10 @@ async function handleRootClick(event) {
         const data = getForumData();
         const npc = data.npcs.find(item => item.id === target.dataset.npcId);
         if (!isRoleLibraryMember(npc)) return notify('warning', '请先生成该角色的人设，加入角色库后才能开启私信');
+        if (!strangerDmAllowed(npc, { decide: true })) {
+            await saveForumData(data, true);
+            return notify('warning', `${npc.name} 暂时不接收陌生人的私信`);
+        }
         const conversation = npc.systemRole ? ensureCharacterConversation(data, getChatSnapshot()) : ensureNpcConversation(data, npc);
         if (!conversation) return;
         await saveForumData(data, true);
@@ -1694,7 +3110,7 @@ async function handleRootClick(event) {
     }
     if (action === 'new-dm-npc') {
         const data = getForumData();
-        const roles = getRoleLibrary(data).filter(npc => !npc.systemRole && !npc.blocked);
+        const roles = getRoleLibrary(data).filter(npc => !npc.systemRole && !npc.blocked && strangerDmAllowed(npc));
         if (!roles.length) return notify('warning', '角色库中还没有可私信的角色');
         const menu = roles.map((npc, index) => `${index + 1}. ${npc.name} (@${npc.handle})`).join('\n');
         const value = window.prompt(`选择要私信的角色\n可填写序号、名称或账号：\n${menu}`)?.trim();
@@ -1824,6 +3240,19 @@ async function handleRootClick(event) {
     if (action === 'upload-profile-background') return getRoot().querySelector('#tf-import-profile-background-file')?.click();
     if (action === 'upload-brand-icon') return getRoot().querySelector('#tf-import-brand-icon-file')?.click();
     if (action === 'upload-forum-wallpaper') return getRoot().querySelector('#tf-import-forum-wallpaper-file')?.click();
+    if (action === 'upload-view-wallpaper') {
+        viewState.pendingViewWallpaperId = target.dataset.viewId || '';
+        return getRoot().querySelector('#tf-import-view-wallpaper-file')?.click();
+    }
+    if (action === 'clear-view-wallpaper') {
+        const theme = getSettings().appearance.viewThemes[target.dataset.viewId];
+        if (!theme) return;
+        await removeImageAsset(theme.wallpaperKey);
+        theme.wallpaperUrl = '';
+        theme.wallpaperKey = '';
+        saveSettings();
+        return render();
+    }
     if (action === 'clear-brand-icon' || action === 'clear-forum-wallpaper') {
         const appearance = getSettings().appearance;
         const kind = action === 'clear-brand-icon' ? 'brandIcon' : 'wallpaper';
@@ -1934,6 +3363,52 @@ async function handleRootClick(event) {
 
     const postId = target.dataset.postId;
     const post = postId ? findPost(postId) : null;
+    if (action === 'report-post' && post) {
+        if (!getSettings().modules.moderation.enabled) return notify('warning', '社区治理模块当前未开启');
+        const reason = window.prompt('举报原因：', '')?.trim();
+        if (!reason) return;
+        const data = getForumData();
+        if (data.world.reports.some(report => report.postId === post.id && ['pending', 'reviewing'].includes(report.status))) return notify('warning', '这篇帖子已经在等待处理');
+        data.world.reports.push(createPostReport({ postId: post.id, reason, reporter: getMyDisplayName() }));
+        viewState.openPostMenuId = '';
+        await saveForumData(data, true);
+        notify('success', '举报已提交');
+        if (getSettings().moderation.systemAdminEnabled && getSettings().modules.moderation.automation === 'auto') void runWorldModuleGeneration('moderation', { reportId: data.world.reports[data.world.reports.length - 1].id });
+        return render();
+    }
+    if (action === 'ai-review-report') {
+        if (!getSettings().moderation.systemAdminEnabled) return notify('warning', '请先开启系统 AI 管理员');
+        return void runWorldModuleGeneration('moderation', { reportId: target.closest('[data-report-id]')?.dataset.reportId });
+    }
+    if (action === 'dismiss-report' || action === 'manual-remove-report-post') {
+        const data = getForumData();
+        const report = data.world.reports.find(item => item.id === target.closest('[data-report-id]')?.dataset.reportId);
+        const reportedPost = report && data.posts.find(item => item.id === report.postId);
+        if (!report) return;
+        report.status = action === 'dismiss-report' ? 'dismissed' : 'actioned';
+        report.action = action === 'dismiss-report' ? 'none' : 'hide';
+        report.decision = action === 'dismiss-report' ? '用户手动驳回' : '用户手动隐藏帖子';
+        report.updatedAt = Date.now();
+        if (reportedPost && action === 'manual-remove-report-post') {
+            reportedPost.moderation = { hidden: true, action: 'hide', reason: report.reason, warning: '', actorNpcId: '', updatedAt: Date.now() };
+        }
+        addModuleNotification(data, 'moderation', action === 'dismiss-report' ? '一条举报已被驳回' : '举报处理完成，相关帖子已隐藏', { actorName: '社区管理', moduleId: 'moderation', itemId: report.id, postId: report.postId });
+        await saveForumData(data, true);
+        syncInjection();
+        return render();
+    }
+    if (action === 'resolve-proposal') {
+        const data = getForumData();
+        const proposal = data.world.proposals.find(item => item.id === target.closest('[data-proposal-id]')?.dataset.proposalId);
+        if (proposal) {
+            const accepted = target.dataset.accepted === 'true';
+            applyModerationProposal(data, getSettings(), proposal, accepted);
+            addModuleNotification(data, 'moderation', accepted ? `已执行管理操作：${proposal.title}` : `已拒绝管理操作：${proposal.title}`, { actorName: '社区管理', moduleId: 'moderation', itemId: proposal.id });
+        }
+        await saveForumData(data, true);
+        syncInjection();
+        return render();
+    }
     if (action === 'open-post' && post) { viewState.selectedPostId = postId; viewState.publicNpcId = ''; viewState.replyTarget = null; return render(); }
     if (action === 'toggle-post-menu' && post) { viewState.openPostMenuId = viewState.openPostMenuId === postId ? '' : postId; return render(); }
     if (action === 'like-post' && post) { post.likedByUser = !post.likedByUser; post.likes = Math.max(0, Number(post.likes || 0) + (post.likedByUser ? 1 : -1)); await saveForumData(getForumData()); return render(); }
@@ -1956,7 +3431,7 @@ async function handleRootClick(event) {
         if (quote === null) return;
         const profile = getSettings().profile;
         const data = getForumData();
-        data.posts.push(createManualPost({ author: profile.displayName || getChatSnapshot().names.user || '我', handle: profile.handle || 'me', content: quote.trim() || `转发了 @${post.handle} 的帖子`, repostOf: post.id, quoteText: `${post.author}：${post.content}`, tags: post.tags || [] }));
+        data.posts.push(createManualPost({ author: getMyDisplayName(), handle: profile.handle || 'me', content: quote.trim() || `转发了 @${post.handle} 的帖子`, repostOf: post.id, quoteText: `${post.author}：${post.content}`, tags: post.tags || [] }));
         post.reposts = Number(post.reposts || 0) + 1;
         await saveForumData(data, true);
         return render();
@@ -2094,7 +3569,18 @@ async function handleRootClick(event) {
 
 function handleRootInput(event) {
     const target = event.target;
-    if (target.matches('.tf-search-input')) { viewState.searchQuery = target.value; applySearchFilter(); return; }
+    if (target.matches('.tf-search-input')) {
+        if (getSettings().ui.activeTab === 'settings') {
+            viewState.settingsSearch = target.value;
+            const cursor = target.selectionStart;
+            render({ preserveScroll: true });
+            queueMicrotask(() => { const input = getRoot()?.querySelector('.tf-search-input'); input?.focus(); if (input && Number.isFinite(cursor)) input.setSelectionRange(cursor, cursor); });
+        } else {
+            viewState.searchQuery = target.value;
+            applySearchFilter();
+        }
+        return;
+    }
     if (target.dataset.secret) { setSessionApiKey(target.dataset.secret, target.value); return; }
     if (target.dataset.apiParamField) {
         const parameter = (getActiveApiProfile().text.extraParameters || []).find(item => item.id === target.closest('[data-api-param-id]')?.dataset.apiParamId);
@@ -2106,6 +3592,32 @@ function handleRootInput(event) {
     if (target.dataset.profileField) {
         getSettings().profile[target.dataset.profileField] = target.value;
         saveSettings();
+        return;
+    }
+    if (target.dataset.builtinPrompt) {
+        getSettings().builtinPrompts[target.dataset.builtinPrompt] = target.value;
+        saveSettings();
+        if (['mainChatInjection', 'roleInjection'].includes(target.dataset.builtinPrompt)) syncInjection();
+        return;
+    }
+    if (target.dataset.moderationRules !== undefined) {
+        getSettings().moderation.communityRules = target.value;
+        saveSettings();
+        return;
+    }
+    if (target.dataset.permissionField) {
+        const level = getSettings().moderation.permissionLevels.find(item => item.id === target.closest('[data-permission-id]')?.dataset.permissionId);
+        if (level) level[target.dataset.permissionField] = target.dataset.permissionField === 'level' ? Number(target.value) : target.value;
+        saveSettings();
+        return;
+    }
+    if (target.dataset.viewThemeField) {
+        const theme = getSettings().appearance.viewThemes[target.closest('[data-view-theme-id]')?.dataset.viewThemeId];
+        if (!theme) return;
+        theme[target.dataset.viewThemeField] = target.value;
+        if (target.dataset.viewThemeField === 'wallpaperUrl') theme.wallpaperKey = '';
+        saveSettings();
+        applyAppearance();
         return;
     }
     if (target.dataset.appearance) {
@@ -2170,6 +3682,12 @@ function handleRootInput(event) {
 
 function handleRootChange(event) {
     const target = event.target;
+    if (target.dataset.permissionCapability && target.type === 'checkbox') {
+        const level = getSettings().moderation.permissionLevels.find(item => item.id === target.closest('[data-permission-id]')?.dataset.permissionId);
+        if (level) level[target.dataset.permissionCapability] = target.checked;
+        saveSettings();
+        return;
+    }
     if (target.dataset.apiParamField) {
         const parameter = (getActiveApiProfile().text.extraParameters || []).find(item => item.id === target.closest('[data-api-param-id]')?.dataset.apiParamId);
         if (parameter) {
@@ -2183,6 +3701,28 @@ function handleRootChange(event) {
         return;
     }
     if (target.dataset.action?.startsWith('toggle-') && target.type === 'checkbox') {
+        if (target.dataset.action === 'toggle-world-module' || target.dataset.action === 'toggle-module-linked' || target.dataset.action === 'toggle-module-injection') {
+            const module = getSettings().modules[target.dataset.moduleId];
+            if (!module) return;
+            const field = target.dataset.action === 'toggle-world-module' ? 'enabled' : target.dataset.action === 'toggle-module-linked' ? 'joinGeneration' : 'injectIntoChat';
+            if (field === 'injectIntoChat' && target.dataset.moduleId === 'forum') getSettings().injection.enabled = target.checked;
+            else module[field] = target.checked;
+            saveSettings();
+            syncInjection();
+            return render({ preserveScroll: true });
+        }
+        if (target.dataset.action === 'toggle-view-theme-inherit') {
+            const theme = getSettings().appearance.viewThemes[target.dataset.viewId];
+            if (theme) theme.inherit = target.checked;
+            saveSettings();
+            return render({ preserveScroll: true });
+        }
+        if (target.dataset.permissionCapability) {
+            const level = getSettings().moderation.permissionLevels.find(item => item.id === target.closest('[data-permission-id]')?.dataset.permissionId);
+            if (level) level[target.dataset.permissionCapability] = target.checked;
+            saveSettings();
+            return;
+        }
         if (target.dataset.action === 'toggle-world-book') {
             const bookName = target.dataset.book || '';
             if (!bookName) return;
@@ -2190,18 +3730,18 @@ function handleRootChange(event) {
             const book = viewState.worldCatalog.find(item => item.name === bookName);
             if (book) book.enabled = target.checked;
             saveSettings();
-            return render();
+            return render({ preserveScroll: true });
         }
         if (target.dataset.action === 'toggle-prompt-entry' || target.dataset.action === 'toggle-prompt-constant') {
             const entry = getSettings().promptEntries.find(item => item.id === target.closest('[data-entry-id]')?.dataset.entryId);
             if (entry) entry[target.dataset.action === 'toggle-prompt-entry' ? 'enabled' : 'constant'] = target.checked;
             saveSettings();
-            return render();
+            return render({ preserveScroll: true });
         }
         if (target.dataset.action === 'toggle-npc-injection') {
             const npc = getForumData().npcs.find(item => item.id === target.closest('[data-npc-id]')?.dataset.npcId);
             if (npc) { npc.inject = target.checked; void saveForumData(getForumData()); syncInjection(); }
-            return render();
+            return render({ preserveScroll: true });
         }
         if (target.dataset.action === 'toggle-role-follows-user') {
             const data = getForumData();
@@ -2214,21 +3754,62 @@ function handleRootChange(event) {
                 if (npc.followsUser && !wasMutual && preferences[type]) data.notifications.unshift(createNotification({ type, actorNpcId: npc.id, actorName: npc.name, content: type === 'mutual' ? `${npc.name} 与你互相关注了` : `${npc.name} 关注了你` }));
                 void saveForumData(data, true);
             }
-            return render();
+            return render({ preserveScroll: true });
         }
         if (target.dataset.action === 'toggle-role-muted' || target.dataset.action === 'toggle-role-blocked') {
             const npc = getForumData().npcs.find(item => item.id === target.closest('[data-npc-id]')?.dataset.npcId);
             if (!npc) return;
             const kind = target.dataset.action === 'toggle-role-muted' ? 'muted' : 'blocked';
-            void setRoleModeration(npc.id, kind, target.checked).then(() => render());
+            void setRoleModeration(npc.id, kind, target.checked).then(() => render({ preserveScroll: true }));
             return;
         }
         if (target.dataset.action === 'toggle-fact-publishable') {
             const fact = getForumData().facts.find(item => item.id === target.closest('[data-fact-id]')?.dataset.factId);
             if (fact) { fact.publishable = target.checked; fact.updatedAt = Date.now(); void saveForumData(getForumData(), true); }
-            return render();
+            return render({ preserveScroll: true });
         }
         return handleSwitchAction(target.dataset.action, target.checked);
+    }
+    if (target.dataset.moduleField) {
+        const module = getSettings().modules[target.closest('[data-module-id]')?.dataset.moduleId];
+        if (!module) return;
+        const numeric = ['rpm', 'probability', 'cooldownMinutes'].includes(target.dataset.moduleField);
+        module[target.dataset.moduleField] = numeric ? Number(target.value) : target.value;
+        if (target.dataset.moduleField === 'generationMode') module.joinGeneration = target.value === 'linked';
+        saveSettings();
+        return render({ preserveScroll: true });
+    }
+    if (target.dataset.companionEnvironment) {
+        const companion = getForumData().world.companion;
+        const field = target.dataset.companionEnvironment;
+        const allowed = field === 'weather'
+            ? ['auto', 'sunny', 'cloudy', 'rain', 'wind', 'snow']
+            : field === 'timeOfDay' ? ['auto', 'dawn', 'day', 'dusk', 'night'] : [];
+        if (!allowed.includes(target.value)) return;
+        companion[field] = target.value;
+        const [reaction, mood] = getCompanionWeatherReaction(getForumData());
+        companion.lastAction = 'weather';
+        companion.message = reaction;
+        companion.mood = mood;
+        companion.updatedAt = Date.now();
+        void saveForumData(getForumData(), true);
+        return render({ preserveScroll: true });
+    }
+    if (target.dataset.companionField) {
+        const companion = getForumData().world.companion;
+        const field = target.dataset.companionField;
+        const value = target.value.trim();
+        if (field === 'avatarUrl' && value && !isSafeImageUrl(value)) return notify('warning', '请填写有效的 http/https 图片直链');
+        companion[field] = value;
+        companion.updatedAt = Date.now();
+        void saveForumData(getForumData(), true);
+        syncInjection();
+        return render({ preserveScroll: true });
+    }
+    if (target.dataset.orchestrationField) {
+        getSettings().orchestration[target.dataset.orchestrationField] = target.dataset.orchestrationField === 'rpm' ? Number(target.value) : target.value;
+        saveSettings();
+        return;
     }
     if (target.dataset.action === 'select-api-profile') { setActiveApiProfile(target.value); return render(); }
     if (target.dataset.apiSetting) {
@@ -2289,6 +3870,11 @@ function handleRootChange(event) {
                 render();
             })();
         }
+        return;
+    }
+    if (target.dataset.npcPermissionRole !== undefined) {
+        const npc = getForumData().npcs.find(item => item.id === target.closest('[data-npc-id]')?.dataset.npcId);
+        if (npc) { npc.permissionRole = target.value; npc.updatedAt = Date.now(); void saveForumData(getForumData(), true); render({ preserveScroll: true }); }
         return;
     }
     if (target.dataset.profileImageUrl) {
@@ -2378,7 +3964,32 @@ function handleRootChange(event) {
     if (target.id === 'tf-import-css-file') {
         void readFile(target).then(text => { if (text === null) return; getSettings().appearance.customCss = text; getSettings().appearance.customCssCleared = false; saveSettings(); applyAppearance(); render(); notify('success', 'CSS 美化已导入'); }).catch(error => notify('error', `CSS 导入失败：${error.message}`));
     }
-    if (['tf-import-profile-avatar-file', 'tf-import-profile-background-file', 'tf-import-avatar-library-file', 'tf-import-npc-avatar-file', 'tf-import-npc-background-file', 'tf-import-floating-button-file', 'tf-import-brand-icon-file', 'tf-import-forum-wallpaper-file'].includes(target.id)) {
+    if (target.id === 'tf-import-module-file') {
+        void readFile(target).then(text => {
+            if (text === null) return;
+            const payload = JSON.parse(text);
+            const moduleId = viewState.pendingModuleImportId;
+            if (payload?.format !== 'tavern-forum-module-settings' || payload.moduleId !== moduleId || !payload.settings || typeof payload.settings !== 'object') throw new Error('这不是当前模块的设置文件');
+            const definition = getModuleDefinition(moduleId);
+            const summary = `模块：${definition?.name || moduleId}\n生成方式：${payload.settings.generationMode || '未填写'}\n正文读取：${payload.settings.injectIntoChat ? '开启' : '关闭'}\n触发概率：${Number(payload.settings.probability ?? 0)}%`;
+            if (!window.confirm(`即将导入以下设置（不会导入 API 密钥或模块内容）：\n\n${summary}\n\n继续吗？`)) return;
+            const defaults = DEFAULT_SETTINGS.modules[moduleId];
+            const allowed = Object.keys(defaults);
+            const imported = Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(payload.settings, key)).map(key => [key, payload.settings[key]]));
+            getSettings().modules[moduleId] = { ...JSON.parse(JSON.stringify(defaults)), ...imported };
+            const promptId = moduleId === 'tasks' ? 'task' : moduleId;
+            if (typeof payload.builtinPrompt === 'string' && promptId in DEFAULT_BUILTIN_PROMPTS) getSettings().builtinPrompts[promptId] = payload.builtinPrompt;
+            const notificationKey = { tasks: 'tasks', travel: 'companion', health: 'health', moderation: 'moderation' }[moduleId] || 'system';
+            if (typeof payload.notificationEnabled === 'boolean') getSettings().notifications[notificationKey] = payload.notificationEnabled;
+            viewState.pendingModuleImportId = '';
+            saveSettings();
+            syncInjection();
+            render();
+            notify('success', `已导入“${definition?.name || moduleId}”设置`);
+        }).catch(error => notify('error', `模块设置导入失败：${error.message}`));
+        return;
+    }
+    if (['tf-import-profile-avatar-file', 'tf-import-profile-background-file', 'tf-import-avatar-library-file', 'tf-import-npc-avatar-file', 'tf-import-npc-background-file', 'tf-import-floating-button-file', 'tf-import-brand-icon-file', 'tf-import-forum-wallpaper-file', 'tf-import-view-wallpaper-file'].includes(target.id)) {
         void (async () => {
             const asset = await readImageAsset(target, target.id.replace('tf-import-', '').replace('-file', ''));
             if (!asset) return;
@@ -2396,6 +4007,16 @@ function handleRootChange(event) {
                 appearance[`${kind}Url`] = asset.url;
                 appearance[`${kind}Key`] = asset.imageKey;
                 saveSettings();
+            } else if (target.id === 'tf-import-view-wallpaper-file') {
+                const theme = getSettings().appearance.viewThemes[viewState.pendingViewWallpaperId];
+                if (theme) {
+                    await removeImageAsset(theme.wallpaperKey);
+                    theme.wallpaperUrl = asset.url;
+                    theme.wallpaperKey = asset.imageKey;
+                    theme.inherit = false;
+                    saveSettings();
+                }
+                viewState.pendingViewWallpaperId = '';
             } else if (target.id === 'tf-import-profile-avatar-file' || target.id === 'tf-import-profile-background-file') {
                 const kind = target.id.includes('background') ? 'background' : 'avatar';
                 const profile = getSettings().profile;
@@ -2445,7 +4066,7 @@ function handleRootChange(event) {
             if (text === null) return;
             const payload = JSON.parse(text);
             if (!Array.isArray(payload?.posts)) throw new Error('文件中没有 posts');
-            const data = { ...payload, version: 9, updatedAt: Date.now() };
+            const data = { ...payload, version: 10, updatedAt: Date.now() };
             linkNpcAuthors(data);
             await enforcePostRetention(data);
             await saveForumData(data, true);
@@ -2573,6 +4194,7 @@ function installLaunchers() {
         fab.type = 'button';
         fab.title = '打开微坛';
         fab.innerHTML = `<span>${icon('message')}</span><i></i>`;
+        fab.addEventListener('error', hideBrokenStoredImage, true);
         installFloatingButtonDrag(fab);
         fab.addEventListener('click', event => {
             if (Number(fab.dataset.ignoreClickUntil || 0) > Date.now()) {
@@ -2599,7 +4221,11 @@ function installLaunchers() {
 
 function openForum(tab = '') {
     try {
-        if (tab) getSettings().ui.activeTab = ['home', 'messages', 'me'].includes(tab) ? tab : 'home';
+        if (tab) {
+            const settings = getSettings();
+            settings.ui.activeTab = ['home', 'services', 'messages', 'me', 'settings'].includes(tab) ? tab : 'home';
+            if (settings.ui.activeTab === 'me') settings.ui.meSection = 'overview';
+        }
         viewState.open = true;
         render();
     } catch (error) {
@@ -2623,7 +4249,7 @@ function bindSillyTavernEvents() {
     };
     if (context.eventTypes?.CHAT_CHANGED) context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => { cancelAutoRefresh(); viewState.selectedNpcId = ''; viewState.publicNpcId = ''; viewState.selectedPostId = ''; viewState.selectedConversationId = ''; viewState.replyTarget = null; viewState.expandedComments.clear(); refresh(); });
     if (context.eventTypes?.MESSAGE_RECEIVED) context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, (_messageId, type) => {
-        if (type === 'first_message' || !getSettings().generation.autoRefreshOnMessage || !hasActiveChat()) return;
+        if (type === 'first_message' || !getSettings().generation.autoRefreshOnMessage || !getSettings().modules.forum.enabled || !hasActiveChat()) return;
         cancelAutoRefresh();
         const scheduledChatId = getChatSnapshot().chatId;
         viewState.autoRefreshTimer = window.setTimeout(() => {
@@ -2647,6 +4273,7 @@ export async function initializeForumUi() {
         root.addEventListener('click', event => void handleRootClick(event));
         root.addEventListener('input', handleRootInput);
         root.addEventListener('change', handleRootChange);
+        root.addEventListener('error', hideBrokenStoredImage, true);
         root.addEventListener('submit', event => event.preventDefault());
         document.body.append(root);
     }

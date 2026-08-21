@@ -1,5 +1,6 @@
 import {
     CHAT_DATA_KEY,
+    DEFAULT_BUILTIN_PROMPTS,
     DEFAULT_FORUM_PROMPT,
     DEFAULT_SETTINGS,
     EMPTY_FORUM_DATA,
@@ -8,9 +9,12 @@ import {
     INJECTION_ID,
     MODULE_ID,
     NPC_INJECTION_ID,
+    WORLD_MODULE_DEFINITIONS,
+    WORLD_MODULE_INJECTION_ID,
 } from './constants.js';
 import { normalizeForumDataShape } from './forum.js';
 import { buildForumInjection, buildNpcInjection, createId, formatChatContext } from './prompt.js';
+import { buildWorldModuleInjection } from './world.js';
 
 const sessionSecrets = { text: new Map(), image: new Map() };
 
@@ -93,6 +97,86 @@ function migrateSettings(settings) {
         }
     }
 
+    settings.builtinPrompts = settings.builtinPrompts && typeof settings.builtinPrompts === 'object'
+        ? settings.builtinPrompts
+        : {};
+    for (const [id, content] of Object.entries(DEFAULT_BUILTIN_PROMPTS)) {
+        if (typeof settings.builtinPrompts[id] !== 'string') settings.builtinPrompts[id] = content;
+    }
+
+    settings.modules = settings.modules && typeof settings.modules === 'object' ? settings.modules : {};
+    for (const definition of WORLD_MODULE_DEFINITIONS) {
+        const current = settings.modules[definition.id] && typeof settings.modules[definition.id] === 'object'
+            ? settings.modules[definition.id]
+            : {};
+        const hadGenerationMode = hasOwn(current, 'generationMode');
+        settings.modules[definition.id] = mergeDefaults(current, DEFAULT_SETTINGS.modules[definition.id]);
+        settings.modules[definition.id].enabled = Boolean(settings.modules[definition.id].enabled);
+        settings.modules[definition.id].injectIntoChat = Boolean(settings.modules[definition.id].injectIntoChat);
+        settings.modules[definition.id].allowApiDraw = Boolean(settings.modules[definition.id].allowApiDraw);
+        if (!hadGenerationMode || !['linked', 'independent', 'local'].includes(settings.modules[definition.id].generationMode)) {
+            settings.modules[definition.id].generationMode = settings.modules[definition.id].joinGeneration ? 'linked' : (definition.id === 'fortune' ? 'local' : 'independent');
+        }
+        if (definition.id !== 'fortune' && settings.modules[definition.id].generationMode === 'local') {
+            settings.modules[definition.id].generationMode = 'independent';
+        }
+        settings.modules[definition.id].joinGeneration = Boolean(settings.modules[definition.id].joinGeneration);
+        settings.modules[definition.id].joinGeneration = settings.modules[definition.id].generationMode === 'linked';
+        settings.modules[definition.id].automation = ['suggest', 'confirm', 'auto'].includes(settings.modules[definition.id].automation)
+            ? settings.modules[definition.id].automation
+            : 'confirm';
+        settings.modules[definition.id].rpm = Math.min(600, Math.max(0, Number(settings.modules[definition.id].rpm || 0)));
+        settings.modules[definition.id].probability = Math.min(100, Math.max(0, Number(settings.modules[definition.id].probability ?? 35)));
+        settings.modules[definition.id].cooldownMinutes = Math.min(43200, Math.max(0, Number(settings.modules[definition.id].cooldownMinutes || 0)));
+    }
+    settings.orchestration.apiProfileId = String(settings.orchestration.apiProfileId || 'inherit');
+    settings.orchestration.rpm = Math.min(600, Math.max(0, Number(settings.orchestration.rpm || 0)));
+    settings.social.directMessagePolicy = ['open', 'following', 'chance'].includes(settings.social.directMessagePolicy)
+        ? settings.social.directMessagePolicy
+        : 'chance';
+    settings.social.strangerBlockChance = Math.min(100, Math.max(0, Number(settings.social.strangerBlockChance ?? 60)));
+    settings.social.proactiveDms.enabled = Boolean(settings.social.proactiveDms.enabled);
+    settings.social.proactiveDms.withForumRefresh = settings.social.proactiveDms.withForumRefresh !== false;
+    settings.social.proactiveDms.withAutomaticRefresh = settings.social.proactiveDms.withAutomaticRefresh !== false;
+    settings.social.proactiveDms.requireFollow = settings.social.proactiveDms.requireFollow !== false;
+    settings.social.proactiveDms.maxPerRun = Math.min(8, Math.max(0, Number(settings.social.proactiveDms.maxPerRun || 0)));
+    settings.automation.quietHours.behavior = ['postpone', 'mute'].includes(settings.automation.quietHours.behavior)
+        ? settings.automation.quietHours.behavior
+        : 'postpone';
+    settings.automation.narrativeIntensity = ['gentle', 'balanced', 'dramatic', 'custom'].includes(settings.automation.narrativeIntensity)
+        ? settings.automation.narrativeIntensity
+        : 'balanced';
+    settings.automation.maxSevereEventsPerTenRuns = Math.min(10, Math.max(0, Number(settings.automation.maxSevereEventsPerTenRuns || 0)));
+    settings.automation.severeCooldownHours = Math.min(720, Math.max(0, Number(settings.automation.severeCooldownHours || 0)));
+    for (const key of Object.keys(DEFAULT_SETTINGS.automation.forbiddenEvents)) {
+        settings.automation.forbiddenEvents[key] = Boolean(settings.automation.forbiddenEvents[key]);
+    }
+    settings.moderation.systemAdminEnabled = Boolean(settings.moderation.systemAdminEnabled);
+    settings.moderation.systemAdminName = String(settings.moderation.systemAdminName || '巡界者').trim().slice(0, 32) || '巡界者';
+    settings.moderation.npcReportsEnabled = settings.moderation.npcReportsEnabled !== false;
+    settings.moderation.permissionLevels = Array.isArray(settings.moderation.permissionLevels)
+        ? settings.moderation.permissionLevels.filter(item => item && typeof item === 'object').map((item, index) => ({
+            id: String(item.id || `level-${index + 1}`),
+            name: String(item.name || `权限 ${index + 1}`),
+            level: Math.min(1000, Math.max(-1000, Number(item.level || 0))),
+            deletePost: Boolean(item.deletePost),
+            adjudicateReport: Boolean(item.adjudicateReport),
+            pinPost: Boolean(item.pinPost),
+            issueTask: Boolean(item.issueTask),
+        }))
+        : clone(DEFAULT_SETTINGS.moderation.permissionLevels);
+    settings.appearance.viewThemes = settings.appearance.viewThemes && typeof settings.appearance.viewThemes === 'object'
+        ? settings.appearance.viewThemes
+        : {};
+    for (const [id, defaults] of Object.entries(DEFAULT_SETTINGS.appearance.viewThemes)) {
+        settings.appearance.viewThemes[id] = mergeDefaults(
+            settings.appearance.viewThemes[id] && typeof settings.appearance.viewThemes[id] === 'object'
+                ? settings.appearance.viewThemes[id]
+                : {},
+            defaults,
+        );
+    }
+
     if (!Array.isArray(settings.apiProfiles) || !settings.apiProfiles.length) {
         settings.apiProfiles = clone(DEFAULT_SETTINGS.apiProfiles);
     }
@@ -131,6 +215,12 @@ function migrateSettings(settings) {
     if (!settings.apiProfiles.some(profile => profile.id === settings.activeApiProfileId)) {
         settings.activeApiProfileId = settings.apiProfiles[0].id;
     }
+    for (const module of Object.values(settings.modules)) {
+        if (module.apiProfileId !== 'inherit' && !settings.apiProfiles.some(profile => profile.id === module.apiProfileId)) module.apiProfileId = 'inherit';
+    }
+    if (settings.orchestration.apiProfileId !== 'inherit' && !settings.apiProfiles.some(profile => profile.id === settings.orchestration.apiProfileId)) {
+        settings.orchestration.apiProfileId = 'inherit';
+    }
     settings.sources.worldInfoEntries = settings.sources.worldInfoEntries && typeof settings.sources.worldInfoEntries === 'object'
         ? settings.sources.worldInfoEntries
         : {};
@@ -155,7 +245,7 @@ function migrateSettings(settings) {
         url: String(item.url || '').trim(),
         imageKey: String(item.imageKey || '').trim(),
     }));
-    if (!['home', 'messages', 'me'].includes(settings.ui.activeTab)) settings.ui.activeTab = 'home';
+    if (!['home', 'services', 'messages', 'me', 'settings'].includes(settings.ui.activeTab)) settings.ui.activeTab = 'home';
 }
 
 export function getSettings() {
@@ -251,7 +341,12 @@ export function deleteApiProfile(profileId) {
 }
 
 export function getApiConfig(kind) {
-    const profile = getActiveApiProfile();
+    return getApiConfigForProfile(getActiveApiProfile().id, kind);
+}
+
+export function getApiConfigForProfile(profileId, kind = 'text') {
+    const settings = getSettings();
+    const profile = settings.apiProfiles.find(item => item.id === profileId) || getActiveApiProfile();
     const normalizedKind = kind === 'image' ? 'image' : 'text';
     const section = profile[normalizedKind];
     return {
@@ -260,6 +355,18 @@ export function getApiConfig(kind) {
         profileName: profile.name,
         apiKey: sessionSecrets[normalizedKind].get(profile.id) || section.apiKey || '',
     };
+}
+
+export function getModuleApiConfig(moduleId, kind = 'text', { orchestrated = false } = {}) {
+    const settings = getSettings();
+    const selectedId = orchestrated
+        ? settings.orchestration.apiProfileId
+        : settings.modules?.[moduleId]?.apiProfileId;
+    const profileId = selectedId && selectedId !== 'inherit' ? selectedId : settings.activeApiProfileId;
+    const config = getApiConfigForProfile(profileId, kind);
+    if (kind !== 'image') config.rpm = Number(orchestrated ? settings.orchestration.rpm : settings.modules?.[moduleId]?.rpm || 0);
+    config.moduleId = moduleId;
+    return config;
 }
 
 export function updateApiConfig(kind, field, value) {
@@ -408,7 +515,8 @@ export async function getWorldInfoCatalog() {
     }
     const settings = getSettings();
     const characterBoundBooks = await getCharacterBoundWorldInfoNames(context);
-    const books = await Promise.all((names || []).map(async book => {
+    const uniqueNames = [...new Set((names || []).map(name => String(name || '').trim()).filter(Boolean))];
+    const books = await Promise.all(uniqueNames.map(async book => {
         try {
             const data = await context.loadWorldInfo(book);
             const characterBinding = characterBoundBooks.get(String(book)) || '';
@@ -556,21 +664,24 @@ export function syncInjection() {
     const settings = getSettings();
     const data = getForumData();
     const blockedIds = new Set(data.npcs.filter(npc => npc.blocked).map(npc => npc.id));
-    const publicPosts = data.posts.filter(post => !blockedIds.has(post.npcId)).map(post => ({
+    const publicPosts = data.posts.filter(post => !blockedIds.has(post.npcId) && !post.moderation?.hidden).map(post => ({
         ...post,
         comments: (post.comments || []).filter(comment => !blockedIds.has(comment.npcId)),
     }));
-    const forumValue = settings.injection.enabled ? buildForumInjection(publicPosts, settings.injection) : '';
-    const npcValue = settings.injection.npcEnabled ? buildNpcInjection(data.npcs.filter(npc => !npc.blocked)) : '';
+    const forumValue = settings.injection.enabled ? buildForumInjection(publicPosts, { ...settings.injection, template: settings.builtinPrompts.mainChatInjection }) : '';
+    const npcValue = settings.injection.npcEnabled ? buildNpcInjection(data.npcs.filter(npc => !npc.blocked), { template: settings.builtinPrompts.roleInjection }) : '';
+    const worldValue = buildWorldModuleInjection(data, settings);
     context.setExtensionPrompt(INJECTION_ID, forumValue, EXTENSION_PROMPT_POSITION_IN_CHAT, Number(settings.injection.depth || 1), false, EXTENSION_PROMPT_ROLE_SYSTEM);
     context.setExtensionPrompt(NPC_INJECTION_ID, npcValue, EXTENSION_PROMPT_POSITION_IN_CHAT, Number(settings.injection.depth || 1), false, EXTENSION_PROMPT_ROLE_SYSTEM);
-    return { forumValue, npcValue };
+    context.setExtensionPrompt(WORLD_MODULE_INJECTION_ID, worldValue, EXTENSION_PROMPT_POSITION_IN_CHAT, Number(settings.injection.depth || 1), false, EXTENSION_PROMPT_ROLE_SYSTEM);
+    return { forumValue, npcValue, worldValue };
 }
 
 export function clearInjection() {
     const context = getContext();
     context.setExtensionPrompt(INJECTION_ID, '', EXTENSION_PROMPT_POSITION_IN_CHAT, 1, false, EXTENSION_PROMPT_ROLE_SYSTEM);
     context.setExtensionPrompt(NPC_INJECTION_ID, '', EXTENSION_PROMPT_POSITION_IN_CHAT, 1, false, EXTENSION_PROMPT_ROLE_SYSTEM);
+    context.setExtensionPrompt(WORLD_MODULE_INJECTION_ID, '', EXTENSION_PROMPT_POSITION_IN_CHAT, 1, false, EXTENSION_PROMPT_ROLE_SYSTEM);
 }
 
 export async function clearAllData() {
@@ -584,6 +695,7 @@ export async function clearAllData() {
         settings.ui.floatingButtonImageKey,
         settings.appearance.brandIconKey,
         settings.appearance.wallpaperKey,
+        ...Object.values(settings.appearance.viewThemes || {}).map(theme => theme.wallpaperKey),
         settings.profile.avatarKey,
         settings.profile.backgroundKey,
         ...settings.avatarLibrary.map(item => item.imageKey),

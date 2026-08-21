@@ -17,3 +17,6 @@ Thumbs.db
 # Local browser profiles created by visual preview tests.
 # These folders may contain Cookies, History, Login Data, and other machine-local state.
 .edge-*/
+
+# Local development handoff for continuing work in another Codex window.
+PROJECT_HANDOFF.md
